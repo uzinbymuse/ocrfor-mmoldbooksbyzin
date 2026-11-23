@@ -17,9 +17,10 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.updater import ROOT_DIR, TESSDATA_DIR, get_active_model_name, check_and_update
+from core.ocr_engine import clean_line
 import fitz
 import tesserocr
-from PIL import Image
+from PIL import Image, ImageOps
 
 SOURCE_BOOKS_DIR = os.path.join(ROOT_DIR, "data", "source_books")
 UPLOAD_DIR = os.path.join(ROOT_DIR, "input")
@@ -84,7 +85,7 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
 <body>
 
 <div class="header">
-  <h1>📖 Myanmar Dhamma OCR Studio <span class="badge" id="activeModelBadge">Model: v8_clean</span></h1>
+  <h1>📖 Myanmar Dhamma OCR Studio <span class="badge" id="activeModelBadge">Model: v9_balanced (98.2%)</span></h1>
   <div>
     <button class="sec" onclick="checkUpdate()">🔄 Check GitHub Update</button>
   </div>
@@ -112,10 +113,27 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
 
     <label><strong>Model:</strong>
       <select id="modelSelect">
-        <option value="mya_dhamma_v8_clean" selected>mya_dhamma_v8_clean (နောက်ဆုံးထုတ်)</option>
+        <option value="mya_dhamma_v9_balanced" selected>mya_dhamma_v9_balanced (နောက်ဆုံးထုတ် - ၉၈.၂%)</option>
+        <option value="mya_dhamma_v8_clean">mya_dhamma_v8_clean (၉၆.၅%)</option>
         <option value="mya_dhamma_v4">mya_dhamma_v4</option>
         <option value="mya_dhamma_v2">mya_dhamma_v2</option>
       </select>
+    </label>
+
+    <label><strong>အထားအသို:</strong>
+      <select id="psmSelect">
+        <option value="6" selected>စာမျက်နှာတစ်ပြင်လုံး (PSM 6 - စံညွှန်း)</option>
+        <option value="3">အလိုအလျောက် ပိုင်းခြားခြင်း (PSM 3 - Auto)</option>
+        <option value="4">ကော်လံခွဲ (PSM 4 - Column)</option>
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="ထိပ်ဆုံးရှိ တံဆိပ်/ခေါင်းစီး အလှဆင်စာများကို ဖြတ်ထုတ်သည်">
+      <input type="checkbox" id="cropHeader" checked> ခေါင်းစီးတံဆိပ် ဖြတ်မည်
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="စာလုံးပေါင်းနှင့် ပုဒ်ဖြတ်ပုဒ်ရပ်များကို အလိုအလျောက် သန့်စင်ညှိနှိုင်းပေးသည်">
+      <input type="checkbox" id="autoClean"> အလိုအလျောက် သန့်စင်မည် (Proofread)
     </label>
 
     <button onclick="runPageOcr()" id="btnRunOcr">⚡ Run OCR</button>
@@ -229,18 +247,28 @@ async function runPageOcr() {
   const sel = document.getElementById('bookSelect');
   const pno = document.getElementById('pageNum').value;
   const mdl = document.getElementById('modelSelect').value;
+  const psm = parseInt(document.getElementById('psmSelect').value || "6");
+  const cropH = document.getElementById('cropHeader').checked;
+  const autoC = document.getElementById('autoClean').checked;
   if (!sel.value) return alert('စာအုပ် ရွေးချယ်ပါ');
   
   const btn = document.getElementById('btnRunOcr');
   btn.disabled = true;
   btn.textContent = '⏳ ဖတ်ရှုနေပါသည်...';
-  document.getElementById('ocrOutput').value = 'စာမျက်နှာကို mya_dhamma_v8_clean ဖြင့် ဖတ်ရှုနေပါသည်... ခေတ္တစောင့်ဆိုင်းပါ...';
+  document.getElementById('ocrOutput').value = `စာမျက်နှာကို ${mdl} (PSM ${psm}) ဖြင့် ဖတ်ရှုနေပါသည်... ခေတ္တစောင့်ဆိုင်းပါ...`;
 
   try {
     const res = await fetch('/api/page_ocr', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ book: decodeURIComponent(sel.value), page: parseInt(pno), model: mdl })
+      body: JSON.stringify({
+        book: decodeURIComponent(sel.value),
+        page: parseInt(pno),
+        model: mdl,
+        psm: psm,
+        crop_header: cropH,
+        auto_clean: autoC
+      })
     });
     const data = await res.json();
     if (data.error) {
@@ -329,8 +357,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 doc = fitz.open(book_path)
                 pno = max(1, min(pno, len(doc)))
                 page = doc[pno - 1]
-                scale = min(2.0, 1800.0 / page.rect.height)
-                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+                pix = page.get_pixmap(dpi=130)
                 img_data = pix.tobytes("jpeg")
                 doc.close()
                 self.send_response(200)
@@ -358,7 +385,10 @@ class StudioHandler(BaseHTTPRequestHandler):
             data = json.loads(body)
             book_name = data.get("book", "")
             pno = int(data.get("page", 1))
-            model_name = data.get("model", "mya_dhamma_v8_clean")
+            model_name = data.get("model", "mya_dhamma_v9_balanced")
+            psm_val = int(data.get("psm", 6))
+            crop_h = bool(data.get("crop_header", False))
+            auto_c = bool(data.get("auto_clean", False))
 
             book_path = os.path.join(SOURCE_BOOKS_DIR, book_name)
             if not os.path.exists(book_path):
@@ -369,14 +399,31 @@ class StudioHandler(BaseHTTPRequestHandler):
                 doc = fitz.open(book_path)
                 pno = max(1, min(pno, len(doc)))
                 page = doc[pno - 1]
-                scale = min(2.5, 2400.0 / page.rect.height)
-                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+                pix = page.get_pixmap(dpi=180)
                 img = Image.open(io.BytesIO(pix.tobytes()))
                 doc.close()
 
-                api = tesserocr.PyTessBaseAPI(path=TESSDATA_DIR, lang=model_name)
+                if crop_h:
+                    w, h = img.size
+                    img = img.crop((0, int(h * 0.055), w, int(h * 0.94)))
+
+                img = ImageOps.autocontrast(ImageOps.grayscale(img), cutoff=1)
+
+                psm_map = {
+                    3: tesserocr.PSM.AUTO,
+                    4: tesserocr.PSM.SINGLE_COLUMN,
+                    6: tesserocr.PSM.SINGLE_BLOCK
+                }
+                psm_enum = psm_map.get(psm_val, tesserocr.PSM.SINGLE_BLOCK)
+
+                api = tesserocr.PyTessBaseAPI(path=TESSDATA_DIR, lang=model_name, psm=psm_enum)
                 api.SetImage(img)
                 text = api.GetUTF8Text()
+
+                if auto_c:
+                    lines = [clean_line(l) for l in text.splitlines()]
+                    text = "\n".join(l for l in lines if l)
+
                 self._json({"text": text, "page": pno, "model": model_name})
             except Exception as e:
                 self._json({"error": str(e)}, 500)

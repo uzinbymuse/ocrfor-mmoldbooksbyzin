@@ -91,8 +91,7 @@ def _ocr_worker(args):
     if fitz is not None:
         doc = fitz.open(pdf_path)
         page = doc[pno - 1]
-        scale = min(2.5, 2400.0 / page.rect.height)
-        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+        pix = page.get_pixmap(dpi=180)
         img = Image.open(io.BytesIO(pix.tobytes()))
         doc.close()
     elif pdfium is not None:
@@ -116,7 +115,7 @@ def _ocr_worker(args):
     text = ""
     if tesserocr is not None:
         try:
-            api = tesserocr.PyTessBaseAPI(path=tessdata_dir, lang=lang)
+            api = tesserocr.PyTessBaseAPI(path=tessdata_dir, lang=lang, psm=tesserocr.PSM.SINGLE_BLOCK)
             api.SetImage(img)
             text = api.GetUTF8Text()
         except Exception:

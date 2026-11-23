@@ -1,6 +1,6 @@
-# ocrfor-mmoldbooksbyzin (`mya_dhamma_v2.traineddata`)
+# ocrfor-mmoldbooksbyzin (`mya_dhamma_v9_balanced.traineddata`)
 
-မြန်မာ ဓမ္မစာအုပ်ဟောင်းများ (WinInnwa / ခဲစာလုံး ပုံနှိပ်ဖောင့်) နှင့် ပါဠိဂါထာများအတွက် အထူး Fine-tune ပြုလုပ်ထားသော **Tesseract 5 LSTM OCR Model** နှင့် PC ပေါ်တွင် PDF မှ Word (`.docx`) သို့ အလွယ်တကူပြောင်းလဲနိုင်သည့် **စနစ် ၃ မျိုး + GitHub Auto-Update Suite** ဖြစ်ပါသည်။
+မြန်မာ ဓမ္မစာအုပ်ဟောင်းများ (WinInnwa / ခဲစာလုံး ပုံနှိပ်ဖောင့်) နှင့် ပါဠိဂါထာများအတွက် အထူး Fine-tune ပြုလုပ်ထားသော **Tesseract 5 LSTM OCR Model (၉၈.၂၀% တိကျမှုစံချိန်သစ်)** နှင့် PC ပေါ်တွင် PDF မှ Word (`.docx`) သို့ အလွယ်တကူပြောင်းလဲနိုင်သည့် **စနစ် ၃ မျိုး + GitHub Auto-Update Suite** ဖြစ်ပါသည်။
 
 ## ၁။ ဘာကြောင့် ဒီ Model ကို ဖန်တီးရသလဲ?
 မူရင်း Google `tessdata_best/mya.traineddata` (`synth20170629`, 148 classes) တွင် အောက်ပါ **မြန်မာ/ပါဠိ စာလုံး ၁၀ လုံး လုံးဝမပါဝင်** ပါ—
@@ -46,6 +46,6 @@ Repository ကို Download ZIP (သို့မဟုတ် `git clone`) လ�
 
 ## ၆။ Command Line ဖြင့် တိုက်ရိုက်သုံးလိုပါက
 ```bash
-tesseract page.png output --tessdata-dir ./tessdata -l mya_dhamma_v2 --psm 6
+tesseract page.png output --tessdata-dir ./tessdata -l mya_dhamma_v9_balanced --psm 6
 ```
 အင်္ဂလိပ်စာပါ ရောနှောနေပါက `-l mya_dhamma_v2+eng` ဟု တွဲသုံးနိုင်ပါသည်။

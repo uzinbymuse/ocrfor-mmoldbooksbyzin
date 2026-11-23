@@ -8,3 +8,4 @@ __pycache__/
 
 # Local environments
 .env
+tessdata/local_version.json

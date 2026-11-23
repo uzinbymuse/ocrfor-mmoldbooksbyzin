@@ -12,3 +12,5 @@
 - [x] **Phase 5c: Batch 5 Pack & Ingestion (80 lines)** — Filtered 17 ghost slices, ingested 80 clean lines (`data/ground_truth/batch5_verified.json`).
 - [x] **Phase 6: Clean-Slate Training (`mya_dhamma_v8_clean`)** — 100% Human-verified Batches 1–5 (356 lines) + 40 synthetic lines from `base/mya.lstm`. Achieved all-time high **96.51%** on Unseen Vol. 2 p.23, solved `၊ vs ။` regression.
 - [x] **Phase 7: Release & Auto-Update Push** — Deployed `mya_dhamma_v8_clean.traineddata`, updated `version.json` (v8.0.0-clean) & `BENCHMARK_v8_clean.md`.
+- [x] **Phase 8: Targeted Fine-Tuning (`mya_dhamma_v9_balanced`)** — Option B balanced fine-tune (400 steps, lr=0.0005, BCER 3.421%). Resolved `ပ္ပ → ပွ` (12/12 = 100%), comma `၊` (53/54 = 98.1%), and digits `၇/၈/၉`. Achieved record **98.20%** on Unseen Vol. 2 p.23 and **96.68%** on Unseen Vol. 1 p.17.
+- [x] **Phase 9: Web Studio Pre-Processing & Resolution Fix** — Upgraded `apps/web_app.py` to use 180 DPI PyMuPDF rendering, PSM 6 default with PSM 3/4 selector, header-crop toggle, and auto-proofread cleaning to eliminate scan bleed-through and multi-column fragmentation.
