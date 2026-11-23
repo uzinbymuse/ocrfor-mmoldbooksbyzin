@@ -170,6 +170,7 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
     </label>
 
     <button onclick="runPageOcr()" id="btnRunOcr">⚡ Run OCR</button>
+    <button onclick="openFullQcStudio()" style="background:#00695c; color:#fff;" title="စကင်ပုံနှင့် BBox မျဉ်းများကို တပြိုင်နက်ချိန်ညှိနိုင်သည့် Full-Screen HITL Studio ကို ဖွင့်သည်">🔬 Full HITL Studio</button>
   </div>
 
   <div class="split-view">
@@ -413,6 +414,13 @@ async function saveLineGt(idx) {
   }
 }
 
+function openFullQcStudio() {
+  const sel = document.getElementById('bookSelect');
+  const pno = document.getElementById('pageNum').value;
+  if (!sel.value) return alert('စာအုပ် ရွေးချယ်ပါ');
+  window.open(`/qc?book=${sel.value}&page=${pno}`, '_blank');
+}
+
 async function runPageOcr() {
   const sel = document.getElementById('bookSelect');
   const pno = document.getElementById('pageNum').value;
@@ -511,6 +519,47 @@ class StudioHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(url.query)
+
+        if url.path == "/qc" or url.path == "/hitl":
+            qc_html_path = os.path.join(ROOT_DIR, "apps", "hitl_qc_panel.html")
+            if os.path.exists(qc_html_path):
+                with open(qc_html_path, "rb") as f:
+                    b = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
+
+        if url.path == "/api/page_gray":
+            book_name = qs.get("book", [""])[0]
+            pno = int(qs.get("page", ["1"])[0])
+            book_path = os.path.join(SOURCE_BOOKS_DIR, book_name)
+            if not os.path.exists(book_path):
+                self.send_error(404, "Book not found")
+                return
+            try:
+                doc = fitz.open(book_path)
+                pno = max(1, min(pno, len(doc)))
+                page = doc[pno - 1]
+                pix = page.get_pixmap(dpi=180)
+                img = Image.open(io.BytesIO(pix.tobytes()))
+                doc.close()
+                img = ImageOps.autocontrast(ImageOps.grayscale(img), cutoff=1)
+                img = ImageEnhance.Sharpness(img).enhance(1.3)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                img_data = buf.getvalue()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(img_data)))
+                self.end_headers()
+                self.wfile.write(img_data)
+                return
+            except Exception as e:
+                self.send_error(500, str(e))
+                return
 
         if url.path == "/" or url.path == "/index.html":
             b = HTML_STUDIO.encode("utf-8")
@@ -660,7 +709,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 gt_dir = os.path.join(ROOT_DIR, "data", "ground_truth")
                 os.makedirs(gt_dir, exist_ok=True)
                 res = handle_save_gt_payload(data, page_img=img, gt_dir=gt_dir)
-                self._json({"success": True, "saved": res})
+                self._json({"success": True, "saved": res, "stem": res.get("stem", "")})
             except Exception as e:
                 self._json({"error": str(e)}, 500)
             return

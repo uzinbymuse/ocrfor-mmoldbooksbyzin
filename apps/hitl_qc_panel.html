@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="my">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Web Studio — Confidence QC &amp; HITL Ground Truth Panel</title>
+<style>
+  :root {
+    --bg: #f8f6f1;
+    --surface: #ffffff;
+    --surface-2: #f3efe6;
+    --ink: #1e1a16;
+    --muted: #6c6257;
+    --border: #ded6c8;
+    --accent: #0f766e;
+    --accent-hover: #115e59;
+    --low-bg: #fee2e2;
+    --low-ink: #991b1b;
+    --warn-bg: #fef3c7;
+    --warn-ink: #92400e;
+    --ok-bg: #dcfce7;
+    --ok-ink: #166534;
+    --del-bg: #fecaca;
+    --ins-bg: #bbf7d0;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Noto Sans Myanmar", system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.75;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .title-group h1 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+  .title-group p {
+    margin: 2px 0 0;
+    font-size: 0.84rem;
+    color: var(--muted);
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  .pill.low { background: var(--low-bg); color: var(--low-ink); border-color: #fca5a5; }
+  .pill.warn { background: var(--warn-bg); color: var(--warn-ink); border-color: #fcd34d; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-ink); border-color: #86efac; }
+
+  label.toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .workspace {
+    display: grid;
+    grid-template-columns: 1fr 1.15fr;
+    gap: 16px;
+    padding: 16px 20px 28px;
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+  @media (max-width: 920px) {
+    .workspace { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-head {
+    padding: 10px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.86rem;
+    font-weight: 700;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .page-stage {
+    position: relative;
+    padding: 14px;
+    background: #ebe6dc;
+    min-height: 460px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow: auto;
+  }
+  .img-wrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.14);
+    background: #fff;
+  }
+  .img-wrap img, .img-wrap canvas {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  #bboxOverlay {
+    position: absolute;
+    border: 2.5px solid #dc2626;
+    background: rgba(239, 68, 68, 0.16);
+    pointer-events: none;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+    display: none;
+  }
+
+  .line-list {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 75vh;
+    overflow-y: auto;
+  }
+  .line-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: var(--surface);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .line-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16);
+  }
+  .line-card.saved {
+    border-left: 4px solid #16a34a;
+  }
+  .line-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .ocr-preview {
+    font-size: 1.04rem;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: var(--surface-2);
+    margin-bottom: 8px;
+    cursor: pointer;
+  }
+  .ocr-word {
+    padding: 1px 4px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+  .conf-low { background: var(--low-bg); color: var(--low-ink); border-bottom: 2px solid #dc2626; }
+  .conf-warn { background: var(--warn-bg); color: var(--warn-ink); border-bottom: 2px solid #d97706; }
+  .conf-ok { background: transparent; }
+
+  .diff-box {
+    font-size: 0.92rem;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: #f9fafb;
+    border: 1px dashed var(--border);
+    margin-bottom: 8px;
+  }
+  .diff-label {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    display: block;
+    margin-bottom: 2px;
+  }
+  del.ocr-del { background: var(--del-bg); color: #7f1d1d; text-decoration: line-through; padding: 0 2px; border-radius: 3px; }
+  ins.ocr-ins { background: var(--ins-bg); color: #14532d; text-decoration: none; padding: 0 2px; border-radius: 3px; font-weight: 600; }
+
+  .edit-input {
+    width: 100%;
+    font-family: "Noto Serif Myanmar", "Noto Sans Myanmar", serif;
+    font-size: 1.02rem;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--ink);
+    background: #fff;
+  }
+  .edit-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.15);
+  }
+  .card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  button {
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover { background: var(--surface-2); }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  .status-msg {
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .status-msg.ok { color: var(--ok-ink); font-weight: 600; }
+  .status-msg.err { color: var(--low-ink); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-group">
+    <h1>Web Studio — Confidence Highlight &amp; HITL Exporter</h1>
+    <p id="pageMeta">Loading page QC...</p>
+  </div>
+  <div class="toolbar">
+    <span class="pill" id="statAvg">Avg: --%</span>
+    <span class="pill low" id="statLow">Low: 0</span>
+    <span class="pill warn" id="statWarn">Warn: 0</span>
+    <label class="toggle">
+      <input type="checkbox" id="filterReviewOnly" />
+      <span>စစ်ဆေးရန်လိုသည့် စာကြောင်းများသာ ပြရန်</span>
+    </label>
+  </div>
+</header>
+
+<main class="workspace">
+  <!-- Left: Grayscale Page Image + Live BBox Overlay -->
+  <section class="panel">
+    <div class="panel-head">
+      <span>Scanned Page (Deskewed Grayscale)</span>
+      <span id="bboxCoords" style="font-weight:400;color:var(--muted)">Click a line to highlight</span>
+    </div>
+    <div class="page-stage">
+      <div class="img-wrap">
+        <img id="pageImage" alt="Scanned page preview" />
+        <div id="bboxOverlay"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right: Confidence-Highlighted Lines + Ollama Diff + GT Save -->
+  <section class="panel">
+    <div class="panel-head">
+      <span>OCR Lines &amp; Proofread Editor (Ctrl+Enter = Save GT)</span>
+      <span id="savedCounter" class="pill ok">Saved GT: 0</span>
+    </div>
+    <div id="lineList" class="line-list"></div>
+  </section>
+</main>
+
+<script>
+/**
+ * Integration Config for apps/web_app.py:
+ *   - GET  /api/page_qc?book=<book>&page=<no>  -> returns page_XXXX_qc.json
+ *   - GET  /api/page_gray?book=<book>&page=<no> -> returns page_XXXX_gray.png
+ *   - POST /api/save_gt                         -> calls hitl_confidence.handle_save_gt_payload()
+ *
+ * When opened standalone (file:// or Canvas preview), falls back gracefully
+ * to a realistic built-in demo payload so you can test the full UI immediately.
+ */
+const params = new URLSearchParams(window.location.search);
+const BOOK_ID = params.get("book") || "vol1_dhamma";
+const PAGE_NO = Number(params.get("page") || 17);
+
+const DEMO_QC_PAYLOAD = {
+  page_no: 17,
+  image_width: 800,
+  image_height: 520,
+  summary: {
+    total_lines: 3,
+    review_lines: 2,
+    low_conf_words: 2,
+    warn_conf_words: 1,
+    avg_confidence: 80.2,
+  },
+  lines: [
+    {
+      line_index: 0,
+      text: "ဗုဒ္ဓ ဓမ္မ သင်္ဃာ ရတနာသုံးပါး။",
+      mean_confidence: 95.1,
+      min_confidence: 93.4,
+      bbox: [60, 70, 720, 125],
+      needs_review: false,
+      highlight_html:
+        '<span class="ocr-word conf-ok" data-conf="96.2" title="Confidence: 96.2%">ဗုဒ္ဓ</span> ' +
+        '<span class="ocr-word conf-ok" data-conf="95.8" title="Confidence: 95.8%">ဓမ္မ</span> ' +
+        '<span class="ocr-word conf-ok" data-conf="94.9" title="Confidence: 94.9%">သင်္ဃာ</span> ' +
+        '<span class="ocr-word conf-ok" data-conf="93.4" title="Confidence: 93.4%">ရတနာသုံးပါး။</span>',
+    },
+    {
+      line_index: 1,
+      text: "ကစ္စာယန သဒ္ဒါကျမ် နိဒါန်း။",
+      mean_confidence: 78.4,
+      min_confidence: 64.0,
+      bbox: [60, 175, 700, 230],
+      needs_review: true,
+      highlight_html:
+        '<span class="ocr-word conf-ok" data-conf="91.2" title="Confidence: 91.2%">ကစ္စာယန</span> ' +
+        '<span class="ocr-word conf-low" data-conf="64.0" title="Confidence: 64.0%">သဒ္ဒါကျမ်</span> ' +
+        '<span class="ocr-word conf-warn" data-conf="80.1" title="Confidence: 80.1%">နိဒါန်း။</span>',
+    },
+    {
+      line_index: 2,
+      text: "တရုပ် ပုံနှိပ်စာလုံးဟောင်။",
+      mean_confidence: 71.5,
+      min_confidence: 62.5,
+      bbox: [60, 280, 690, 335],
+      needs_review: true,
+      highlight_html:
+        '<span class="ocr-word conf-warn" data-conf="80.5" title="Confidence: 80.5%">တရုပ်</span> ' +
+        '<span class="ocr-word conf-low" data-conf="62.5" title="Confidence: 62.5%">ပုံနှိပ်စာလုံးဟောင်။</span>',
+    },
+  ],
+  post_correction: {
+    model: "qwen3:8b",
+    lines: [
+      { line_index: 0, status: "skipped_high_conf", raw_text: "ဗုဒ္ဓ ဓမ္မ သင်္ဃာ ရတနာသုံးပါး။", corrected_text: "ဗုဒ္ဓ ဓမ္မ သင်္ဃာ ရတနာသုံးပါး။", changed: false, diff_html: "" },
+      {
+        line_index: 1,
+        status: "corrected",
+        raw_text: "ကစ္စာယန သဒ္ဒါကျမ် နိဒါန်း။",
+        corrected_text: "ကစ္စာယန သဒ္ဒါကျမ်း နိဒါန်း။",
+        changed: true,
+        restored_archaic_terms: [],
+        diff_html: 'ကစ္စာယန သဒ္ဒါကျမ်<ins class="ocr-ins">း</ins> နိဒါန်း။',
+      },
+      {
+        line_index: 2,
+        status: "corrected",
+        raw_text: "တရုပ် ပုံနှိပ်စာလုံးဟောင်။",
+        corrected_text: "တရုပ် ပုံနှိပ်စာလုံးဟောင်း။",
+        changed: true,
+        restored_archaic_terms: ["တရုတ်->တရုပ်"],
+        diff_html: 'တရုပ် ပုံနှိပ်စာလုံးဟောင်<ins class="ocr-ins">း</ins>။',
+      },
+    ],
+  },
+};
+
+function makeDemoPageDataUrl(qc) {
+  const c = document.createElement("canvas");
+  c.width = qc.image_width;
+  c.height = qc.image_height;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#f4efe4";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = "#d8cfbe";
+  ctx.strokeRect(20, 20, c.width - 40, c.height - 40);
+  ctx.fillStyle = "#2b2520";
+  ctx.font = "28px 'Noto Serif Myanmar', serif";
+  qc.lines.forEach((ln) => {
+    ctx.fillText(ln.text, ln.bbox[0] + 8, ln.bbox[1] + 38);
+  });
+  return c.toDataURL("image/png");
+}
+
+let state = {
+  qc: null,
+  isDemo: false,
+  savedCount: 0,
+  activeLine: null,
+};
+
+function highlightBBox(bbox) {
+  const img = document.getElementById("pageImage");
+  const overlay = document.getElementById("bboxOverlay");
+  const coords = document.getElementById("bboxCoords");
+  if (!bbox || !state.qc || !img.clientWidth) return;
+
+  const scaleX = img.clientWidth / state.qc.image_width;
+  const scaleY = img.clientHeight / state.qc.image_height;
+  overlay.style.left = `${bbox[0] * scaleX}px`;
+  overlay.style.top = `${bbox[1] * scaleY}px`;
+  overlay.style.width = `${(bbox[2] - bbox[0]) * scaleX}px`;
+  overlay.style.height = `${(bbox[3] - bbox[1]) * scaleY}px`;
+  overlay.style.display = "block";
+  coords.textContent = `bbox: [${bbox.join(", ")}]`;
+}
+
+async function saveLineToGT(line, inputEl, cardEl, statusEl) {
+  const corrected = inputEl.value.trim();
+  if (!corrected) {
+    statusEl.textContent = "စာသား ဗလာဖြစ်နေပါသည်";
+    statusEl.className = "status-msg err";
+    return;
+  }
+
+  const payload = {
+    book_id: BOOK_ID,
+    page_no: state.qc.page_no,
+    line_index: line.line_index,
+    bbox: line.bbox,
+    original_ocr_text: line.text,
+    corrected_text: corrected,
+    original_confidence: line.min_confidence,
+  };
+
+  statusEl.textContent = "Saving...";
+  statusEl.className = "status-msg";
+
+  try {
+    if (state.isDemo) {
+      await new Promise((r) => setTimeout(r, 180));
+      statusEl.textContent = `Demo OK -> ${BOOK_ID}_p${String(state.qc.page_no).padStart(4, "0")}_l${String(line.line_index).padStart(3, "0")}.gt.txt`;
+    } else {
+      const res = await fetch("/api/save_gt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      statusEl.textContent = `Saved: ${data.stem}.png + .gt.txt`;
+    }
+    statusEl.className = "status-msg ok";
+    if (!cardEl.classList.contains("saved")) {
+      cardEl.classList.add("saved");
+      state.savedCount += 1;
+      document.getElementById("savedCounter").textContent = `Saved GT: ${state.savedCount}`;
+    }
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    statusEl.className = "status-msg err";
+  }
+}
+
+function renderLines() {
+  const list = document.getElementById("lineList");
+  const reviewOnly = document.getElementById("filterReviewOnly").checked;
+  const corrByIdx = new Map();
+  (state.qc.post_correction?.lines || []).forEach((c) => corrByIdx.set(c.line_index, c));
+
+  list.innerHTML = "";
+
+  state.qc.lines.forEach((line) => {
+    if (reviewOnly && !line.needs_review) return;
+
+    const corr = corrByIdx.get(line.line_index);
+    const initialText = corr && corr.changed ? corr.corrected_text : line.text;
+
+    const card = document.createElement("div");
+    card.className = "line-card";
+    card.dataset.lineIndex = line.line_index;
+
+    const meta = document.createElement("div");
+    meta.className = "line-meta";
+    const confTier = line.min_confidence < 70 ? "low" : line.min_confidence < 85 ? "warn" : "ok";
+    const archaicBadge =
+      corr?.restored_archaic_terms?.length
+        ? `<span class="pill warn">Archaic Protected: ${corr.restored_archaic_terms.join(", ")}</span>`
+        : "";
+    meta.innerHTML = `
+      <span><strong>Line #${line.line_index + 1}</strong> · Mean ${line.mean_confidence.toFixed(1)}% · Min ${line.min_confidence.toFixed(1)}%</span>
+      <span><span class="pill ${confTier}">${line.needs_review ? "Review" : "High Conf"}</span> ${archaicBadge}</span>
+    `;
+
+    const preview = document.createElement("div");
+    preview.className = "ocr-preview";
+    preview.innerHTML = line.highlight_html || line.text;
+    preview.addEventListener("click", () => selectCard(card, line));
+
+    card.appendChild(meta);
+    card.appendChild(preview);
+
+    if (corr && corr.changed && corr.diff_html) {
+      const diffBox = document.createElement("div");
+      diffBox.className = "diff-box";
+      diffBox.innerHTML = `<span class="diff-label">Ollama (${state.qc.post_correction.model}) Diff</span>${corr.diff_html}`;
+      card.appendChild(diffBox);
+    }
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "edit-input";
+    input.value = initialText;
+    input.addEventListener("focus", () => selectCard(card, line));
+
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
+
+    const btnRow = document.createElement("div");
+    btnRow.className = "btn-row";
+
+    const btnRaw = document.createElement("button");
+    btnRaw.type = "button";
+    btnRaw.textContent = "Use Raw OCR";
+    btnRaw.addEventListener("click", () => { input.value = line.text; input.focus(); });
+
+    const btnSave = document.createElement("button");
+    btnSave.type = "button";
+    btnSave.className = "primary";
+    btnSave.textContent = "Save to Ground Truth";
+
+    const statusEl = document.createElement("span");
+    statusEl.className = "status-msg";
+
+    btnSave.addEventListener("click", () => saveLineToGT(line, input, card, statusEl));
+    input.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        saveLineToGT(line, input, card, statusEl);
+      }
+    });
+
+    btnRow.appendChild(btnRaw);
+    if (corr && corr.changed) {
+      const btnLLM = document.createElement("button");
+      btnLLM.type = "button";
+      btnLLM.textContent = "Use Ollama";
+      btnLLM.addEventListener("click", () => { input.value = corr.corrected_text; input.focus(); });
+      btnRow.appendChild(btnLLM);
+    }
+    btnRow.appendChild(btnSave);
+
+    actions.appendChild(btnRow);
+    actions.appendChild(statusEl);
+
+    card.appendChild(input);
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+}
+
+function selectCard(cardEl, line) {
+  document.querySelectorAll(".line-card.active").forEach((el) => el.classList.remove("active"));
+  cardEl.classList.add("active");
+  state.activeLine = line;
+  highlightBBox(line.bbox);
+}
+
+async function init() {
+  const imgEl = document.getElementById("pageImage");
+  try {
+    if (window.location.protocol.startsWith("http")) {
+      const res = await fetch(`/api/page_qc?book=${encodeURIComponent(BOOK_ID)}&page=${PAGE_NO}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.qc = await res.json();
+      imgEl.src = `/api/page_gray?book=${encodeURIComponent(BOOK_ID)}&page=${PAGE_NO}`;
+    } else {
+      throw new Error("Standalone preview mode");
+    }
+  } catch {
+    state.isDemo = true;
+    state.qc = DEMO_QC_PAYLOAD;
+    imgEl.src = makeDemoPageDataUrl(state.qc);
+  }
+
+  const s = state.qc.summary;
+  document.getElementById("pageMeta").textContent =
+    `${BOOK_ID} · Page ${state.qc.page_no} (${s.total_lines} lines, ${s.review_lines} to review)${state.isDemo ? " · Interactive Demo Mode" : ""}`;
+  document.getElementById("statAvg").textContent = `Avg: ${s.avg_confidence.toFixed(1)}%`;
+  document.getElementById("statLow").textContent = `Low: ${s.low_conf_words}`;
+  document.getElementById("statWarn").textContent = `Warn: ${s.warn_conf_words}`;
+
+  renderLines();
+  document.getElementById("filterReviewOnly").addEventListener("change", renderLines);
+  window.addEventListener("resize", () => {
+    if (state.activeLine) highlightBBox(state.activeLine.bbox);
+  });
+}
+
+init();
+</script>
+</body>
+</html>
