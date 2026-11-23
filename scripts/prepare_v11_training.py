@@ -41,10 +41,15 @@ from core.synthetic_dhamma_gen import (
 # Frozen 4-page Evaluation Set prefixes (STRICTLY EXCLUDED from training!)
 FROZEN_EVAL_PREFIXES = (
     "v1_p11_",
+    "v1_p011_",
     "v2_p23_",
+    "v2_p023_",
     "v1_p17_",
+    "v1_p017_",
     "kaccayana_p5_",
+    "kaccayana_p05_",
     "basic_kaccayana_p5_",
+    "basic_kaccayana_p05_",
 )
 
 
@@ -110,11 +115,62 @@ def load_human_gt(gt_dirs, img_search_dirs):
 
 
 def try_load_beatson_dataset(out_img_dir, max_lines=4000):
-    """Attempt to load Hugging Face `alexbeatson/burmese_ocr_data` and filter via validate_myanmar_line()."""
+    """Load Beatson Burmese OCR dataset from local zip or Hugging Face and filter via validate_myanmar_line()."""
+    local_zip = os.path.join(REPO_ROOT, "data", "external", "beatson_cleaned.zip")
+    if os.path.exists(local_zip):
+        print(f"[INFO] Ingesting Beatson dataset from local archive: {local_zip} (target up to {max_lines} clean lines)...")
+        import zipfile
+        import shutil
+        os.makedirs(out_img_dir, exist_ok=True)
+        kept = []
+        rejected = 0
+        with zipfile.ZipFile(local_zip) as zf:
+            gt_names = sorted(n for n in zf.namelist() if n.endswith(".gt.txt"))
+            all_names = set(zf.namelist())
+            for name in gt_names:
+                if len(kept) >= max_lines:
+                    break
+                try:
+                    raw_txt = zf.read(name).decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    continue
+                norm_txt = normalize_myanmar_unicode(raw_txt)
+                ok = 8 <= len(norm_txt) <= 140 and len(validate_myanmar_line(norm_txt)) == 0
+                if not ok:
+                    rejected += 1
+                    continue
+                stem = os.path.basename(name)[:-len(".gt.txt")]
+                src_png = f"cleaned/pic/{stem}.png"
+                if src_png not in all_names:
+                    continue
+                lid = f"beatson_{len(kept)+1:05d}"
+                img_path = os.path.join(out_img_dir, lid + ".png")
+                if not os.path.exists(img_path):
+                    with zf.open(src_png) as src, open(img_path, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    try:
+                        g = Image.open(img_path).convert("L")
+                        pad_y = max(8, int(g.height * 0.12))
+                        padded = Image.new("L", (g.width + 24, g.height + 2 * pad_y), 255)
+                        padded.paste(g, (12, pad_y))
+                        padded.save(img_path)
+                    except Exception:
+                        if os.path.exists(img_path):
+                            os.remove(img_path)
+                        continue
+                kept.append({
+                    "id": lid,
+                    "text": norm_txt,
+                    "source": "beatson_local",
+                    "image_path": img_path,
+                })
+        print(f"[INFO] Beatson loaded: {len(kept)} clean lines kept ({rejected} malformed filtered out).")
+        return kept
+
     try:
         from datasets import load_dataset
     except ImportError:
-        print("[INFO] Hugging Face `datasets` library not installed -> switching smoothly to Synthetic Fallback.")
+        print("[INFO] Hugging Face `datasets` library not installed and local zip missing -> switching to Synthetic Fallback.")
         return []
 
     print(f"[INFO] Attempting to fetch alexbeatson/burmese_ocr_data (target up to {max_lines} clean lines)...")
@@ -128,7 +184,7 @@ def try_load_beatson_dataset(out_img_dir, max_lines=4000):
                 break
             raw_txt = (sample.get("text") or sample.get("transcription") or "").strip()
             norm_txt = normalize_myanmar_unicode(raw_txt)
-            ok, _ = validate_myanmar_line(norm_txt, min_chars=8, max_chars=140)
+            ok = 8 <= len(norm_txt) <= 140 and len(validate_myanmar_line(norm_txt)) == 0
             if not ok:
                 rejected += 1
                 continue
@@ -177,7 +233,7 @@ def collect_extra_clean_corpus(corpus_json_paths, exclude_pages=None):
                 continue
             for raw_l in txt.splitlines():
                 norm = normalize_myanmar_unicode(raw_l)
-                ok, _ = validate_myanmar_line(norm, min_chars=18, max_chars=95)
+                ok = 18 <= len(norm) <= 95 and len(validate_myanmar_line(norm)) == 0
                 # Strict filter: skip lines with running headers or any Latin/ASCII digits
                 if not ok:
                     continue
@@ -187,6 +243,17 @@ def collect_extra_clean_corpus(corpus_json_paths, exclude_pages=None):
                     continue
                 lines.append(norm)
     return lines
+
+
+def get_tesseract_cmd():
+    import shutil
+    cand = shutil.which("tesseract")
+    if cand:
+        return cand
+    win_def = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if os.path.exists(win_def):
+        return win_def
+    return "tesseract"
 
 
 def _build_lstmf_worker(args):
@@ -205,12 +272,15 @@ def _build_lstmf_worker(args):
         f.write(f"WordStr 0 0 {w} {h} 0 #{text}\n\t 0 0 {w} {h} 0\n")
     env = os.environ.copy()
     env["OMP_THREAD_LIMIT"] = "1"
-    subprocess.run(
-        ["tesseract", img_path, base, "--tessdata-dir", tessdata_dir, "-l", lang, "--psm", "6", "lstm.train"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
-    )
-    ok = os.path.exists(lstmf) and os.path.getsize(lstmf) > 0
-    return lstmf, ok
+    tess = get_tesseract_cmd()
+    for psm in ("6", "13"):
+        subprocess.run(
+            [tess, img_path, base, "--tessdata-dir", tessdata_dir, "-l", lang, "--psm", psm, "lstm.train"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+        )
+        if os.path.exists(lstmf) and os.path.getsize(lstmf) > 0:
+            return lstmf, True
+    return lstmf, False
 
 
 def main():

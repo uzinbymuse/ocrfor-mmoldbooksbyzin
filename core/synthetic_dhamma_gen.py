@@ -151,7 +151,7 @@ def build_synthetic_text_pool(target_count: int = 5000, extra_corpus_texts=None,
 
     def try_add(txt: str):
         norm = normalize_myanmar_unicode(txt)
-        ok, _ = validate_myanmar_line(norm, min_chars=10, max_chars=120)
+        ok = 10 <= len(norm) <= 120 and len(validate_myanmar_line(norm)) == 0
         if ok and norm not in seen:
             seen.add(norm)
             pool.append(norm)
@@ -200,7 +200,7 @@ def build_synthetic_text_pool(target_count: int = 5000, extra_corpus_texts=None,
         punc = rng.choice(["၊", "။"])
         cand = f"{pref} {m_num}။ {s1.rstrip('။၊')}{punc}"
         norm = normalize_myanmar_unicode(cand)
-        ok, _ = validate_myanmar_line(norm, min_chars=10, max_chars=140)
+        ok = 10 <= len(norm) <= 140 and len(validate_myanmar_line(norm)) == 0
         seq_n += 1
         if ok and norm not in seen:
             seen.add(norm)
