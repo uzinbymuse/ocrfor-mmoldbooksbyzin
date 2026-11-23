@@ -11,6 +11,7 @@ import sys
 import json
 import io
 import time
+import email
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
@@ -80,12 +81,26 @@ textarea { width: 100%; flex: 1; padding: 16px; border: none; outline: none; fon
 progress { width: 100%; height: 16px; margin-top: 10px; }
 .copy-btn { font-size: 12px; padding: 4px 10px; background: #2b7a4b; }
 .copy-btn:hover { background: #23633d; }
+.btn-upload {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: #7a1f1f;
+  color: white;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: bold;
+  border: none;
+  transition: background 0.2s;
+}
+.btn-upload:hover { background: #9c2828; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>📖 Myanmar Dhamma OCR Studio <span class="badge" id="activeModelBadge">Model: v9_balanced (98.2%)</span></h1>
+  <h1>📖 Myanmar Dhamma OCR Studio <span class="badge" id="activeModelBadge">Model: v10 (95.5%)</span></h1>
   <div>
     <button class="sec" onclick="checkUpdate()">🔄 Check GitHub Update</button>
   </div>
@@ -104,6 +119,11 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
       </select>
     </label>
 
+    <label class="btn-upload" title="မိမိစက်ထဲရှိ မည်သည့် PDF စာအုပ်ကိုမဆို တင်၍ တစ်မျက်နှာချင်း စစ်ဆေးနိုင်သည်">
+      📂 PDF အသစ် တင်မည်
+      <input type="file" id="inspectorPdfInput" accept=".pdf" style="display:none;" onchange="uploadInspectorPdf(event)">
+    </label>
+
     <button onclick="prevPage()">◀ ရှေ့</button>
     <label><strong>စာမျက်နှာ:</strong>
       <input type="number" id="pageNum" value="1" min="1" style="width: 75px;" onchange="loadPage()">
@@ -113,7 +133,8 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
 
     <label><strong>Model:</strong>
       <select id="modelSelect">
-        <option value="mya_dhamma_v9_balanced" selected>mya_dhamma_v9_balanced (နောက်ဆုံးထုတ် - ၉၈.၂%)</option>
+        <option value="mya_dhamma_v10" selected>mya_dhamma_v10 (နောက်ဆုံးထုတ် - ၉၅.၅% စံချိန်သစ်)</option>
+        <option value="mya_dhamma_v9_balanced">mya_dhamma_v9_balanced (၉၈.၂% သပြေကန်)</option>
         <option value="mya_dhamma_v8_clean">mya_dhamma_v8_clean (၉၆.၅%)</option>
         <option value="mya_dhamma_v4">mya_dhamma_v4</option>
         <option value="mya_dhamma_v2">mya_dhamma_v2</option>
@@ -220,6 +241,41 @@ function onBookChange() {
     document.getElementById('pageNum').value = 1;
     document.getElementById('pageCount').textContent = `/ ${bk.pages}`;
     loadPage();
+  }
+}
+
+async function uploadInspectorPdf(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('pdf', file);
+  
+  const sel = document.getElementById('bookSelect');
+  sel.disabled = true;
+  document.getElementById('ocrOutput').value = `"${file.name}" ကို တင်သွင်းနေပါသည်... ခေတ္တစောင့်ဆိုင်းပါ...`;
+  
+  try {
+    const res = await fetch('/api/upload_book', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert('Upload error: ' + data.error);
+      document.getElementById('ocrOutput').value = 'Error: ' + data.error;
+    } else {
+      await loadBooks();
+      sel.value = encodeURIComponent(data.filename);
+      onBookChange();
+      document.getElementById('ocrOutput').value = `"${file.name}" (${data.pages} မျက်နှာ) ကို အောင်မြင်စွာ တင်သွင်းပြီးပါပြီ။ ⚡ Run OCR ခလုတ်ကို နှိပ်၍ စတင်ဖတ်ရှုနိုင်ပါပြီ။`;
+      alert(`"${file.name}" ကို အောင်မြင်စွာ တင်သွင်းပြီးပါပြီ။`);
+    }
+  } catch (err) {
+    alert('Upload failed: ' + err.message);
+    document.getElementById('ocrOutput').value = 'Upload failed: ' + err.message;
+  } finally {
+    sel.disabled = false;
+    e.target.value = '';
   }
 }
 
@@ -379,13 +435,46 @@ class StudioHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
 
+        if url.path == "/api/upload_book":
+            content_type = self.headers.get("Content-Type", "")
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+
+            msg_bytes = f"Content-Type: {content_type}\r\n\r\n".encode("utf-8") + body
+            msg = email.message_from_bytes(msg_bytes)
+
+            saved_filename = ""
+            for part in msg.walk():
+                filename = part.get_filename()
+                if filename and filename.lower().endswith(".pdf"):
+                    payload = part.get_payload(decode=True)
+                    clean_name = os.path.basename(filename).replace(" ", "_")
+                    dest_path = os.path.join(SOURCE_BOOKS_DIR, clean_name)
+                    with open(dest_path, "wb") as f:
+                        f.write(payload)
+                    saved_filename = clean_name
+                    break
+
+            if saved_filename:
+                pages = 1
+                try:
+                    doc = fitz.open(os.path.join(SOURCE_BOOKS_DIR, saved_filename))
+                    pages = len(doc)
+                    doc.close()
+                except Exception:
+                    pass
+                self._json({"success": True, "filename": saved_filename, "pages": pages})
+            else:
+                self._json({"error": "No valid PDF file uploaded"}, 400)
+            return
+
         if url.path == "/api/page_ocr":
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length).decode("utf-8")
             data = json.loads(body)
             book_name = data.get("book", "")
             pno = int(data.get("page", 1))
-            model_name = data.get("model", "mya_dhamma_v9_balanced")
+            model_name = data.get("model", "mya_dhamma_v10")
             psm_val = int(data.get("psm", 6))
             crop_h = bool(data.get("crop_header", False))
             auto_c = bool(data.get("auto_clean", False))

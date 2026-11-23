@@ -197,7 +197,7 @@ def convert_pdf_to_docx(
     pdf_path,
     out_docx,
     tessdata_dir,
-    lang="mya_dhamma_v2",
+    lang="mya_dhamma_v10",
     start_page=1,
     end_page=None,
     page_offset=0,

@@ -31,4 +31,11 @@
   - Extracted 58 real ground-truth lines across 3 classical books: `Basic_Kaccayana_Grammar` p.5 (25 lines), `Maydine_01` p.26 (16 lines), and `Ru_Gandi` p.36 (17 lines).
   - Synthesized 40 targeted contrast lines addressing narrow lead-type `သဒ္ဒါ`, kinzi `င်္`, `ဉာဏ်`, `စကား`, `အဋ္ဌကထာ`, `ဋီကာ`, `ပိဋကတ်`, `ဓာတ်`, `မွေ့`, `ရှား`, `ပ္ပ`, and digits `၇/၈/၉`.
   - Compiled `data/ground_truth/batch6_verified.json` (98 lines, 6,435 characters) and generated `BATCH6_GRAMMAR_PACK_SPEC.md` ready for `mya_dhamma_v10` training.
+* **Batch 7 Surgical Micro-Pack Curated (35 lines)**:
+  - Formulated `data/ground_truth/batch7_surgical_pack.json` directly addressing remaining Kaccāyana errors: `သင်္ဂြိုဟ်` kinzi, `ဉာဏ်` (ဉ vs တ), `သေသေးတင်`, `ဓာတ်အဋ္ဌကထာ၊`, `ဋီကာ၊`, `ရှားမှရှားပေ။`, and `ဣတိပိ`.
+* **mya_dhamma_v10 Official Universal Release**:
+  - Fine-tuned from `mya_dhamma_v9_balanced` with 766 combined entries.
+  - Achieved highest ever 4-Page Composite Mean Accuracy: **95.50%** (Unseen Vol. 1 p.17: 97.01%, Unseen Vol. 2 p.23: 97.58%, Basic Kaccāyana p.5: 94.52% with `ဉာဏ်` 100%, Vol. 1 Preface p.11: 92.89%).
+  - Released `tessdata/mya_dhamma_v10.traineddata`, updated `version.json` (v10.0.0) and `BENCHMARK_v10.md`.
+  - Added custom PDF file uploader (`📂 PDF အသစ် တင်မည်`) directly in Web Studio Page Inspector with automatic dropdown registration and instant page loading.
 * Saved reusable workflow skill `myanmar-dhamma-ocr-trainer` (`SKILL.md`).

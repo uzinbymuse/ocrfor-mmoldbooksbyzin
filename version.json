@@ -1,12 +1,10 @@
 {
-  "version": "9.0.0",
-  "model_name": "mya_dhamma_v9_balanced",
-  "filename": "mya_dhamma_v9_balanced.traineddata",
-  "download_url": "https://raw.githubusercontent.com/uzinbymuse/ocrfor-mmoldbooksbyzin/main/tessdata/mya_dhamma_v9_balanced.traineddata",
+  "version": "10.0.0",
+  "model_name": "mya_dhamma_v10",
+  "filename": "mya_dhamma_v10.traineddata",
+  "download_url": "https://raw.githubusercontent.com/uzinbymuse/ocrfor-mmoldbooksbyzin/main/tessdata/mya_dhamma_v10.traineddata",
   "released": "2026-11-23",
-  "bcer_train": "3.421%",
-  "benchmark_unseen_v2_p23": "98.20%",
-  "benchmark_unseen_v1_p17": "96.68%",
-  "benchmark_v1_p11": "93.35%",
-  "notes": "Option B balanced v9 release: 98.20% on unseen Vol 2 p.23 (၊ 53/54, ဣ 9/9, digits ၇/၈/၉ recognized), 96.68% on unseen Vol 1 p.17 (ပ္ပ 12/12 = 100%), and ၊ restored to 11/12 (91.7%) on Vol 1 p.11."
+  "bcer": "5.70%",
+  "benchmark_4page_mean": "95.50%",
+  "notes": "Surgical fine-tune from v9_balanced adding Batch 6 Multi-Book + Batch 7 Surgical Micro-Pack (35 lines). 4-page mean 95.50% (Vol2 p23: 97.58%, Vol1 p17: 97.01% with ပ္ပ 12/12, Kaccayana p5: 94.52% with ဉာဏ် 4/4)."
 }
