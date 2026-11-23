@@ -16,4 +16,5 @@
 * **v2 Quality Review**: User spotted pseudo-label drift on Vol. 1 Preface p. 11 (`ကြုံ -> ကျု`, `ပြုကျင့် -> ဖုကက`, `မှီခို -> မှခို`), confirming the need for 100% human-verified Ground Truth before training v3/v4.
 * **Batch 1 Human GT**: Built interactive HTML Proofreader (`gt_proofread_batch1.html`). User verified and returned `batch1_verified.json` (**51 clean lines**, converted to `.lstmf`; coverage: `၊` 34, `။` 22, `၏` 10, `ဣ` 3, `၍` 3, `ဩ` 1, `ဈ` 1).
 * **Batch 2 Human GT**: Generated `gt_proofread_batch2.html` (**77 lines** from Vol. 1 p. 12, Vol. 2 p. 22, Vol. 2 p. 34) — awaiting user's exported `batch2_verified.json`.
+* **Batch 3 Human-Verified Ground Truth (81 lines)**: Proofread and verified 81 OCR lines across Vol. 2 p. 236 (28 lines), Vol. 1 p. 280 (27 lines), and Vol. 1 p. 531 (26 lines). Corrected OCR errors in Buddha Gunakatha (သုဂတော၊ လောကဝိဒူ၊ အနုတ္တရောပုရိသဒမ္မသာရထိ၊ သတ္ထာ ဒေဝမနုဿာနံ၊ ဗုဒ္ဓေါ), monastic ordination rules, and Shwegyin Sasana Paing Sayadawgyi's Owada verse. Saved dataset to `data/ground_truth/batch_verified_81lines.json`.
 * Saved reusable workflow skill `myanmar-dhamma-ocr-trainer` (`SKILL.md`).
