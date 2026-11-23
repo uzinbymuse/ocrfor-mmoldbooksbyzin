@@ -1,0 +1,10 @@
+# Ignore large PDF source books (kept locally for inspection)
+*.pdf
+*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local environments
+.env
