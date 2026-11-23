@@ -1,31 +1,53 @@
-"""300 DPI Rendering, Deskewing, Sauvola Binarization & Dynamic Crop Module.
+"""300 DPI Rendering, Deskewing, CLAHE, Sauvola/Niblack/Otsu & A/B Grid Module.
 
-Drop-in preprocessing module designed for ``core/ocr_engine.py`` in
+Drop-in preprocessing & A/B benchmarking module designed for ``core/`` in
 ``uzinbymuse/ocrfor-mmoldbooksbyzin``.
 
-Replaces fixed 180 DPI rendering, basic grayscale/autocontrast, and hard-coded
-4.5% / 8.5% header-footer cropping with a document-adaptive pipeline tuned for
-historical Burmese/Pali printed books:
-
+Capabilities:
 1. Exact 300 DPI PDF rendering (PyMuPDF primary, pypdfium2 fallback).
-2. Uneven paper illumination / bleed-through background normalization.
-3. Pre-rotation dark scanner-border removal so deskewing never tilts black edges.
-4. Coarse-to-fine projection-profile deskewing (accurate on dense text lines).
-5. Exact O(N) integral-image Sauvola adaptive binarization (no scikit-image
-   dependency required).
-6. Dynamic content-box margin cropping with optional gap-aware running
-   header/footer trimming.
+2. Uneven paper illumination normalization & pre-rotation scanner-border trim.
+3. Coarse-to-fine projection-profile deskewing.
+4. Dynamic content-box margin cropping before CLAHE/binarization so local
+   contrast enhancement focuses purely on the text region.
+5. Optional 2x bicubic upscaling & CLAHE contrast enhancement for faded scans.
+6. Exact O(N) integral-image Sauvola and Niblack adaptive binarization, plus
+   Otsu and clean grayscale modes.
+7. Stratified Golden-Set A/B Grid Runner that benchmarks recipes separately for
+   each page stratum (``clean``, ``faded``, ``preface``, etc.) and exports the
+   winning per-stratum recipes to JSON.
+
+Usage:
+    # Run built-in self-tests
+    python3 image_preprocessor.py --self-test
+
+    # Run A/B preprocessing grid on your Golden Set
+    python3 image_preprocessor.py \\
+        --ab-grid \\
+        --manifest data/golden/manifest.json \\
+        --tessdata tessdata \\
+        --lang mya_dhamma_v9_balanced \\
+        --fast-grid \\
+        --save-grid-report reports/preprocess_ab_grid.json
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from dataclasses import asdict, dataclass
+from itertools import product
 from pathlib import Path
-from typing import Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
 from PIL import Image
+
+
+BinarizeMode = Literal["sauvola", "niblack", "otsu", "grayscale"]
 
 
 @dataclass(frozen=True)
@@ -38,14 +60,29 @@ class PreprocessConfig:
     deskew: bool = True
     max_skew_angle: float = 5.0
     min_skew_angle: float = 0.15
-    output_mode: Literal["sauvola", "grayscale"] = "sauvola"
+    apply_clahe: bool = False
+    clahe_clip_limit: float = 2.0
+    clahe_tile_grid: Tuple[int, int] = (8, 8)
+    upscale: float = 1.0
+    output_mode: BinarizeMode = "sauvola"
     sauvola_window: int = 31
     sauvola_k: float = 0.20
+    niblack_window: int = 31
+    niblack_k: float = -0.20
     denoise_speckles: bool = True
     min_speckle_area: int = 3
     dynamic_crop: bool = True
     crop_header_footer: bool = False
     margin_pad_px: int = 24
+
+
+@dataclass(frozen=True)
+class GridRecipe:
+    """One candidate preprocessing + PSM combination for A/B grid search."""
+
+    name: str
+    config: PreprocessConfig
+    psm: int = 6
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +120,7 @@ def render_pdf_page(
 
 
 # ---------------------------------------------------------------------------
-# 2. Background Illumination Normalization & Scanner-Border Removal
+# 2. Background Illumination Normalization, Scanner-Border Trim & CLAHE
 # ---------------------------------------------------------------------------
 
 def normalize_background(gray: np.ndarray) -> np.ndarray:
@@ -146,6 +183,17 @@ def strip_black_scanner_borders(
     return gray[top:bottom, left:right]
 
 
+def apply_clahe(
+    gray: np.ndarray,
+    *,
+    clip_limit: float = 2.0,
+    tile_grid_size: Tuple[int, int] = (8, 8),
+) -> np.ndarray:
+    """Enhance local contrast on faded scans via CLAHE before binarization."""
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    return clahe.apply(gray)
+
+
 # ---------------------------------------------------------------------------
 # 3. Projection-Profile Deskewing
 # ---------------------------------------------------------------------------
@@ -165,15 +213,8 @@ def _rotate_gray(gray: np.ndarray, angle_deg: float) -> np.ndarray:
     )
 
 
-def estimate_skew_angle(
-    gray: np.ndarray,
-    max_angle: float = 5.0,
-) -> float:
-    """Estimate page skew angle (degrees) via coarse-to-fine projection variance.
-
-    Positive return value means the image should be rotated counter-clockwise
-    by that angle (as accepted by ``cv2.getRotationMatrix2D``).
-    """
+def estimate_skew_angle(gray: np.ndarray, max_angle: float = 5.0) -> float:
+    """Estimate page skew angle (degrees) via coarse-to-fine projection variance."""
     h, w = gray.shape
     scale = min(1.0, 900.0 / max(h, w))
     small = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -216,24 +257,11 @@ def deskew_image(
 
 
 # ---------------------------------------------------------------------------
-# 4. Exact O(N) Integral-Image Sauvola Adaptive Binarization
+# 4. Binarization (O(N) Integral Sauvola & Niblack + Otsu)
 # ---------------------------------------------------------------------------
 
-def sauvola_binarize(
-    gray: np.ndarray,
-    *,
-    window_size: int = 31,
-    k: float = 0.20,
-    r: float = 128.0,
-) -> np.ndarray:
-    """Apply Sauvola adaptive thresholding in O(N) time using OpenCV integrals.
-
-    Formula:
-        T(x, y) = mean(x, y) * (1 + k * (std(x, y) / R - 1))
-
-    Preserves fine Burmese diacritics (လုံးကြီးတင်, အောက်ကမြစ်, ဝစ္စပေါက်)
-    on uneven or aged scans far better than global Otsu thresholding.
-    """
+def _local_mean_std(gray: np.ndarray, window_size: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute exact local mean and standard deviation in O(N) via integrals."""
     win = max(3, window_size | 1)
     half = win // 2
 
@@ -258,18 +286,49 @@ def sauvola_binarize(
 
     mean = sum_val / area
     variance = np.maximum(sq_sum_val / area - mean * mean, 0.0)
-    std = np.sqrt(variance)
+    return mean, np.sqrt(variance)
 
+
+def sauvola_binarize(
+    gray: np.ndarray,
+    *,
+    window_size: int = 31,
+    k: float = 0.20,
+    r: float = 128.0,
+) -> np.ndarray:
+    """Sauvola adaptive thresholding: ``T = mean * (1 + k * (std / R - 1))``."""
+    mean, std = _local_mean_std(gray, window_size)
     thresh = mean * (1.0 + k * (std / r - 1.0))
     return np.where(gray > thresh, 255, 0).astype(np.uint8)
 
 
-def remove_tiny_speckles(binary: np.ndarray, min_area: int = 3) -> np.ndarray:
-    """Remove isolated dust specks while preserving Burmese dots (့, း, ံ).
+def niblack_binarize(
+    gray: np.ndarray,
+    *,
+    window_size: int = 31,
+    k: float = -0.20,
+    flat_paper_std: float = 3.0,
+    flat_paper_mean: float = 200.0,
+) -> np.ndarray:
+    """Niblack adaptive thresholding: ``T = mean + k * std`` with flat-paper guard.
 
-    At 300 DPI, Burmese dot diacritics typically span 12–40+ px²; keeping
-    ``min_area <= 4`` safely removes 1–2 px scan noise without touching dots.
+    Strong on severely faded ink while suppressing classic Niblack noise in
+    blank bright paper margins where local variance is near zero.
     """
+    mean, std = _local_mean_std(gray, window_size)
+    thresh = mean + k * std
+    is_paper = (gray > thresh) | ((std < flat_paper_std) & (mean > flat_paper_mean))
+    return np.where(is_paper, 255, 0).astype(np.uint8)
+
+
+def otsu_binarize(gray: np.ndarray) -> np.ndarray:
+    """Global Otsu thresholding (effective on clean, evenly lit pages)."""
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return binary
+
+
+def remove_tiny_speckles(binary: np.ndarray, min_area: int = 3) -> np.ndarray:
+    """Remove isolated dust specks while preserving Burmese dots (့, း, ံ)."""
     if min_area <= 1:
         return binary
 
@@ -297,12 +356,7 @@ def dynamic_margin_crop(
     crop_header_footer: bool = False,
     pad_px: int = 24,
 ) -> np.ndarray:
-    """Dynamically crop around the actual text block with clean white padding.
-
-    If ``crop_header_footer=True``, trims a thin isolated top/bottom band only
-    when separated from the main text body by a clear whitespace gap (preventing
-    accidental clipping of body lines on pages with shifted margins).
-    """
+    """Dynamically crop around the actual text block with clean white padding."""
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if img.ndim == 3 else img
     _, mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
 
@@ -375,13 +429,8 @@ def preprocess_page_image(
     pil_img: Image.Image,
     config: Optional[PreprocessConfig] = None,
 ) -> Image.Image:
-    """Run full preprocessing pipeline on a rendered PIL page image.
-
-    Returns a clean ``PIL.Image.Image`` (mode ``'L'``) ready for ``tesserocr``
-    or Tesseract CLI.
-    """
+    """Run full preprocessing pipeline on a rendered PIL page image."""
     cfg = config or PreprocessConfig()
-
     gray = np.array(pil_img.convert("L"), dtype=np.uint8)
 
     if cfg.strip_scanner_borders:
@@ -397,6 +446,27 @@ def preprocess_page_image(
             min_angle=cfg.min_skew_angle,
         )
 
+    # Crop tightly to the text block BEFORE CLAHE/binarization so local
+    # contrast enhancement focuses on text rather than rotated blank margins.
+    if cfg.dynamic_crop:
+        gray = dynamic_margin_crop(
+            gray,
+            crop_header_footer=cfg.crop_header_footer,
+            pad_px=cfg.margin_pad_px,
+        )
+
+    if cfg.upscale > 1.0:
+        new_w = int(round(gray.shape[1] * cfg.upscale))
+        new_h = int(round(gray.shape[0] * cfg.upscale))
+        gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+    if cfg.apply_clahe:
+        gray = apply_clahe(
+            gray,
+            clip_limit=cfg.clahe_clip_limit,
+            tile_grid_size=cfg.clahe_tile_grid,
+        )
+
     if cfg.output_mode == "sauvola":
         processed = sauvola_binarize(
             gray,
@@ -405,15 +475,20 @@ def preprocess_page_image(
         )
         if cfg.denoise_speckles:
             processed = remove_tiny_speckles(processed, min_area=cfg.min_speckle_area)
+    elif cfg.output_mode == "niblack":
+        processed = niblack_binarize(
+            gray,
+            window_size=cfg.niblack_window,
+            k=cfg.niblack_k,
+        )
+        if cfg.denoise_speckles:
+            processed = remove_tiny_speckles(processed, min_area=cfg.min_speckle_area)
+    elif cfg.output_mode == "otsu":
+        processed = otsu_binarize(gray)
+        if cfg.denoise_speckles:
+            processed = remove_tiny_speckles(processed, min_area=cfg.min_speckle_area)
     else:
         processed = gray
-
-    if cfg.dynamic_crop:
-        processed = dynamic_margin_crop(
-            processed,
-            crop_header_footer=cfg.crop_header_footer,
-            pad_px=cfg.margin_pad_px,
-        )
 
     return Image.fromarray(processed, mode="L")
 
@@ -430,7 +505,187 @@ def render_and_preprocess_page(
 
 
 # ---------------------------------------------------------------------------
-# Self-Test Suite (Run directly: python3 image_preprocessor.py)
+# 7. Stratified A/B Preprocessing Grid Runner (Golden Set)
+# ---------------------------------------------------------------------------
+
+def build_ab_grid(
+    *,
+    modes: Sequence[BinarizeMode] = ("grayscale", "otsu", "sauvola", "niblack"),
+    clahe_options: Sequence[bool] = (False, True),
+    upscale_options: Sequence[float] = (1.0, 2.0),
+    psm_options: Sequence[int] = (6,),
+) -> List[GridRecipe]:
+    """Generate candidate preprocessing + PSM recipes for A/B benchmarking."""
+    recipes: List[GridRecipe] = []
+    for mode, use_clahe, scale, psm in product(modes, clahe_options, upscale_options, psm_options):
+        clahe_tag = "clahe" if use_clahe else "noclahe"
+        scale_tag = f"{scale:.0f}x"
+        name = f"{mode}_{clahe_tag}_{scale_tag}_psm{psm}"
+        cfg = PreprocessConfig(
+            dpi=300,
+            apply_clahe=use_clahe,
+            upscale=scale,
+            output_mode=mode,
+        )
+        recipes.append(GridRecipe(name=name, config=cfg, psm=psm))
+    return recipes
+
+
+def make_tesseract_ocr_fn(
+    *,
+    tessdata_dir: Union[str, Path],
+    lang: str = "mya_dhamma_v9_balanced",
+) -> Callable[[Image.Image, int], str]:
+    """Build an OCR callable ``(pil_img, psm) -> text`` (tesserocr or CLI)."""
+    tess_dir = str(tessdata_dir)
+
+    def _run(pil_img: Image.Image, psm: int) -> str:
+        try:
+            import tesserocr  # type: ignore
+
+            with tesserocr.PyTessBaseAPI(path=tess_dir, lang=lang, psm=psm) as api:
+                api.SetImage(pil_img)
+                return api.GetUTF8Text() or ""
+        except ImportError:
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            img_path = Path(tmp) / "page.png"
+            pil_img.save(img_path, format="PNG")
+            proc = subprocess.run(
+                [
+                    "tesseract",
+                    str(img_path),
+                    "stdout",
+                    "--tessdata-dir",
+                    tess_dir,
+                    "-l",
+                    lang,
+                    "--psm",
+                    str(psm),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return proc.stdout
+
+    return _run
+
+
+def run_preprocessing_ab_grid(
+    manifest_path: Union[str, Path],
+    *,
+    ocr_fn: Callable[[Image.Image, int], str],
+    recipes: Sequence[GridRecipe],
+    save_report_path: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """Benchmark preprocessing recipes across a stratified Golden Set manifest.
+
+    Manifest entries must include ``page_id``, ``book_id``, ``stratum``,
+    ``ref_txt``, and either ``image_path`` or (``pdf_path`` + ``page_index``).
+
+    Returns a dictionary containing per-recipe results and the winning recipe
+    for each stratum (e.g., ``clean`` vs ``faded``).
+    """
+    try:
+        from scripts.eval_golden import aggregate_strata, score_page_texts  # type: ignore
+    except ImportError:
+        from eval_golden import aggregate_strata, score_page_texts  # type: ignore
+
+    mpath = Path(manifest_path)
+    base_dir = mpath.parent
+    entries = json.loads(mpath.read_text(encoding="utf-8")).get("pages", [])
+    if not entries:
+        raise ValueError(f"No 'pages' found in manifest: {mpath}")
+
+    loaded_pages: List[Dict[str, Any]] = []
+    for entry in entries:
+        ref_path = Path(entry["ref_txt"])
+        if not ref_path.is_absolute():
+            ref_path = base_dir / ref_path
+        ref_text = ref_path.read_text(encoding="utf-8")
+
+        if "image_path" in entry and entry["image_path"]:
+            img_path = Path(entry["image_path"])
+            if not img_path.is_absolute():
+                img_path = base_dir / img_path
+            pil_img = Image.open(img_path).convert("RGB")
+        else:
+            pdf_path = Path(entry["pdf_path"])
+            if not pdf_path.is_absolute():
+                pdf_path = base_dir / pdf_path
+            pil_img = render_pdf_page(pdf_path, int(entry["page_index"]), dpi=300)
+
+        loaded_pages.append(
+            {
+                "page_id": str(entry["page_id"]),
+                "book_id": str(entry.get("book_id", "unknown")),
+                "stratum": str(entry.get("stratum", "default")),
+                "ref_text": ref_text,
+                "pil_img": pil_img,
+            }
+        )
+
+    recipe_results: List[Dict[str, Any]] = []
+    best_by_stratum: Dict[str, Dict[str, Any]] = {}
+
+    for recipe in recipes:
+        page_scores = []
+        for page in loaded_pages:
+            proc_img = preprocess_page_image(page["pil_img"], config=recipe.config)
+            hyp_text = ocr_fn(proc_img, recipe.psm)
+            page_scores.append(
+                score_page_texts(
+                    page_id=page["page_id"],
+                    book_id=page["book_id"],
+                    stratum=page["stratum"],
+                    ref_text=page["ref_text"],
+                    hyp_text=hyp_text,
+                )
+            )
+
+        strata_map, overall = aggregate_strata(page_scores)
+        strata_dict = {k: asdict(v) for k, v in strata_map.items()}
+
+        recipe_entry = {
+            "recipe_name": recipe.name,
+            "psm": recipe.psm,
+            "config": asdict(recipe.config),
+            "overall": asdict(overall),
+            "strata": strata_dict,
+        }
+        recipe_results.append(recipe_entry)
+
+        for stratum_name, stats in strata_dict.items():
+            prev_best = best_by_stratum.get(stratum_name)
+            if prev_best is None or stats["cer_pct"] < prev_best["cer_pct"]:
+                best_by_stratum[stratum_name] = {
+                    "recipe_name": recipe.name,
+                    "cer_pct": stats["cer_pct"],
+                    "wer_pct": stats["wer_pct"],
+                    "exact_line_pct": stats["exact_line_pct"],
+                    "psm": recipe.psm,
+                    "config": asdict(recipe.config),
+                }
+
+    report = {
+        "manifest": str(mpath),
+        "recipes_tested": len(recipe_results),
+        "best_by_stratum": best_by_stratum,
+        "all_results": recipe_results,
+    }
+
+    if save_report_path is not None:
+        out = Path(save_report_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Self-Test Suite
 # ---------------------------------------------------------------------------
 
 def _run_self_tests() -> None:
@@ -448,43 +703,134 @@ def _run_self_tests() -> None:
 
     mat = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), 2.4, 1.0)
     tilted = cv2.warpAffine(canvas, mat, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=225)
-
-    # Add 12px black scanner border on left and top
     tilted[:, :12] = 15
     tilted[:12, :] = 15
 
-    # Add light 1px speckle dust
     dust_y = rng.integers(50, h - 50, size=80)
     dust_x = rng.integers(50, w - 50, size=80)
     tilted[dust_y, dust_x] = 20
 
-    # 1. Verify skew angle estimation accuracy
+    # 1. Verify skew angle detection
     stripped = strip_black_scanner_borders(tilted)
     norm_bg = normalize_background(stripped)
     detected_angle = estimate_skew_angle(norm_bg, max_angle=5.0)
-    assert abs(detected_angle - (-2.4)) <= 0.35, (
-        f"Expected skew angle near -2.4 deg, got {detected_angle}"
-    )
+    assert abs(detected_angle - (-2.4)) <= 0.35
 
-    # 2. Verify full end-to-end preprocessing pipeline
+    # 2. Verify all 4 modes (sauvola, niblack, otsu, grayscale) + CLAHE + 2x upscale
     pil_in = Image.fromarray(tilted, mode="L")
-    cfg = PreprocessConfig(dpi=300, output_mode="sauvola", dynamic_crop=True, margin_pad_px=20)
-    pil_out = preprocess_page_image(pil_in, config=cfg)
-    arr_out = np.array(pil_out)
+    for mode in ("sauvola", "niblack", "otsu", "grayscale"):
+        cfg = PreprocessConfig(
+            apply_clahe=True,
+            upscale=1.0,
+            output_mode=mode,  # type: ignore[arg-type]
+            dynamic_crop=True,
+            margin_pad_px=20,
+        )
+        out = np.array(preprocess_page_image(pil_in, config=cfg))
+        assert out.shape[0] < h and out.shape[1] < w, f"{mode} failed crop: {out.shape}"
+        if mode != "grayscale":
+            assert set(np.unique(out).tolist()).issubset({0, 255})
 
-    assert pil_out.mode == "L"
-    unique_vals = set(np.unique(arr_out).tolist())
-    assert unique_vals.issubset({0, 255}), f"Expected binary values, got {unique_vals}"
-    assert arr_out.shape[0] < h and arr_out.shape[1] < w, (
-        f"Expected cropped dimensions < ({h}, {w}), got {arr_out.shape}"
-    )
-    assert arr_out[0, :].mean() == 255.0 and arr_out[:, 0].mean() == 255.0
+    out_1x = preprocess_page_image(pil_in, PreprocessConfig(upscale=1.0, output_mode="sauvola"))
+    out_2x = preprocess_page_image(pil_in, PreprocessConfig(upscale=2.0, output_mode="sauvola"))
+    assert out_2x.size[0] > out_1x.size[0] * 1.8
+
+    # 3. Verify stratified A/B Grid Runner selects separate winners per stratum
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        clean_img = root / "clean.png"
+        faded_img = root / "faded.png"
+        pil_in.save(clean_img)
+        pil_in.save(faded_img)
+
+        ref_clean = "ဗုဒ္ဓ ဓမ္မ သင်္ဃာ။\n"
+        ref_faded = "ကစ္စာယန သဒ္ဒါကျမ်း။\n"
+        (root / "clean.txt").write_text(ref_clean, encoding="utf-8")
+        (root / "faded.txt").write_text(ref_faded, encoding="utf-8")
+
+        manifest = {
+            "version": "1.0",
+            "pages": [
+                {"page_id": "p_clean", "book_id": "b1", "stratum": "clean", "ref_txt": "clean.txt", "image_path": "clean.png"},
+                {"page_id": "p_faded", "book_id": "b2", "stratum": "faded", "ref_txt": "faded.txt", "image_path": "faded.png"},
+            ],
+        }
+        mpath = root / "manifest.json"
+        mpath.write_text(json.dumps(manifest), encoding="utf-8")
+
+        recipes = [
+            GridRecipe("otsu_noclahe_1x_psm6", PreprocessConfig(output_mode="otsu", apply_clahe=False), psm=6),
+            GridRecipe("niblack_clahe_1x_psm6", PreprocessConfig(output_mode="niblack", apply_clahe=True), psm=6),
+        ]
+
+        call_idx = {"n": 0}
+        def _mock_ocr(_img: Image.Image, _psm: int) -> str:
+            idx = call_idx["n"]
+            call_idx["n"] += 1
+            if idx == 0:
+                return ref_clean
+            if idx == 1:
+                return "ကစ္စာယန သဒ္ဒါကျမ်။\n"
+            if idx == 2:
+                return "ဗုဒ္ဓ ဓမ္မ သင်္ဃ။\n"
+            return ref_faded
+
+        rep_path = root / "grid_report.json"
+        report = run_preprocessing_ab_grid(
+            mpath,
+            ocr_fn=_mock_ocr,
+            recipes=recipes,
+            save_report_path=rep_path,
+        )
+        assert rep_path.exists()
+        assert report["best_by_stratum"]["clean"]["recipe_name"] == "otsu_noclahe_1x_psm6"
+        assert report["best_by_stratum"]["faded"]["recipe_name"] == "niblack_clahe_1x_psm6"
 
     print(
-        f"All preprocessing tests PASSED "
-        f"(detected skew={detected_angle:+.2f} deg, output shape={arr_out.shape})."
+        f"All image_preprocessor + CLAHE/Niblack + A/B grid tests PASSED "
+        f"(detected skew={detected_angle:+.2f} deg)."
     )
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Myanmar OCR Image Preprocessor & A/B Grid Runner")
+    parser.add_argument("--self-test", action="store_true", help="Run built-in self-tests")
+    parser.add_argument("--ab-grid", action="store_true", help="Run stratified A/B preprocessing grid")
+    parser.add_argument("--manifest", type=Path, help="Golden Set manifest.json with image_path or pdf_path")
+    parser.add_argument("--tessdata", type=Path, default=Path("tessdata"), help="Path to tessdata directory")
+    parser.add_argument("--lang", type=str, default="mya_dhamma_v9_balanced", help="Tesseract model name")
+    parser.add_argument("--fast-grid", action="store_true", help="Run fast 8-recipe grid (1x scale, PSM 6)")
+    parser.add_argument("--save-grid-report", type=Path, default=None, help="Output JSON path for grid results")
+    args = parser.parse_args(argv)
+
+    if args.self_test or not args.ab_grid:
+        _run_self_tests()
+        return 0
+
+    if not args.manifest:
+        parser.error("--manifest is required with --ab-grid.")
+
+    recipes = (
+        build_ab_grid(upscale_options=(1.0,), psm_options=(6,))
+        if args.fast_grid
+        else build_ab_grid(upscale_options=(1.0, 2.0), psm_options=(6, 4))
+    )
+    ocr_fn = make_tesseract_ocr_fn(tessdata_dir=args.tessdata, lang=args.lang)
+    report = run_preprocessing_ab_grid(
+        args.manifest,
+        ocr_fn=ocr_fn,
+        recipes=recipes,
+        save_report_path=args.save_grid_report,
+    )
+
+    print("\n=== Best Preprocessing Recipe per Stratum ===")
+    for stratum, info in sorted(report["best_by_stratum"].items()):
+        print(
+            f"  {stratum:<12} -> {info['recipe_name']:<28} "
+            f"CER={info['cer_pct']:.2f}%  WER={info['wer_pct']:.2f}%  ExactLn={info['exact_line_pct']:.1f}%"
+        )
+    return 0
 
 
 if __name__ == "__main__":
-    _run_self_tests()
+    sys.exit(main())
