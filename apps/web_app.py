@@ -19,9 +19,10 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.updater import ROOT_DIR, TESSDATA_DIR, get_active_model_name, check_and_update
 from core.ocr_engine import clean_line
+from core.post_processor import proofread_text
 import fitz
 import tesserocr
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 
 SOURCE_BOOKS_DIR = os.path.join(ROOT_DIR, "data", "source_books")
 UPLOAD_DIR = os.path.join(ROOT_DIR, "input")
@@ -154,7 +155,7 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
     </label>
 
     <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="စာလုံးပေါင်းနှင့် ပုဒ်ဖြတ်ပုဒ်ရပ်များကို အလိုအလျောက် သန့်စင်ညှိနှိုင်းပေးသည်">
-      <input type="checkbox" id="autoClean"> အလိုအလျောက် သန့်စင်မည် (Proofread)
+      <input type="checkbox" id="autoClean" checked> အလိုအလျောက် သန့်စင်မည် (Smart Proofread)
     </label>
 
     <button onclick="runPageOcr()" id="btnRunOcr">⚡ Run OCR</button>
@@ -174,7 +175,8 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
     <div class="pane">
       <div class="pane-header">
         <span>📝 ဖတ်ရှုရရှိသော စာသား (OCR Text - ပြင်ဆင်နိုင်သည်)</span>
-        <div>
+        <div style="display:flex; gap:6px;">
+          <button class="copy-btn" onclick="smartProofread()" style="background:#2e7d32; color:#fff;" title="သဒ္ဒါ၊ ဓမ္မအဘိဓာန်နှင့် ဖွဲ့စည်းပုံစည်းမျဉ်းများဖြင့် စာလုံးပေါင်း အမှန်ပြင်သည်">✨ Smart Proofread</button>
           <button class="copy-btn" onclick="copyText()">📋 Copy Text</button>
         </div>
       </div>
@@ -340,6 +342,28 @@ async function runPageOcr() {
   }
 }
 
+async function smartProofread() {
+  const ta = document.getElementById('ocrOutput');
+  if (!ta.value.trim()) return;
+  const original = ta.value;
+  ta.style.opacity = '0.5';
+  try {
+    const res = await fetch('/api/proofread', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: original})
+    });
+    const data = await res.json();
+    if (data.text) {
+      ta.value = data.text;
+    }
+  } catch(e) {
+    alert('Proofread error: ' + e.message);
+  } finally {
+    ta.style.opacity = '1';
+  }
+}
+
 function copyText() {
   const t = document.getElementById('ocrOutput');
   t.select();
@@ -468,6 +492,15 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._json({"error": "No valid PDF file uploaded"}, 400)
             return
 
+        if url.path == "/api/proofread":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            data = json.loads(body)
+            raw_text = data.get("text", "")
+            fixed_text = proofread_text(raw_text)
+            self._json({"text": fixed_text})
+            return
+
         if url.path == "/api/page_ocr":
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length).decode("utf-8")
@@ -497,6 +530,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     img = img.crop((0, int(h * 0.055), w, int(h * 0.94)))
 
                 img = ImageOps.autocontrast(ImageOps.grayscale(img), cutoff=1)
+                img = ImageEnhance.Sharpness(img).enhance(1.3)
 
                 psm_map = {
                     3: tesserocr.PSM.AUTO,
@@ -512,6 +546,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 if auto_c:
                     lines = [clean_line(l) for l in text.splitlines()]
                     text = "\n".join(l for l in lines if l)
+                    text = proofread_text(text)
 
                 self._json({"text": text, "page": pno, "model": model_name})
             except Exception as e:
