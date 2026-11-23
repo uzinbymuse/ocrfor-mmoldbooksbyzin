@@ -4,11 +4,26 @@ import os
 import re
 import time
 import shutil
+import io
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import pypdfium2 as pdfium
-import pypdf
-from PIL import ImageOps, ImageDraw
+try:
+    import fitz
+except ImportError:
+    fitz = None
+try:
+    import pypdfium2 as pdfium
+except ImportError:
+    pdfium = None
+try:
+    import tesserocr
+except ImportError:
+    tesserocr = None
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+from PIL import Image, ImageOps, ImageDraw
 import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER
@@ -72,12 +87,23 @@ def _ocr_worker(args):
         with open(txt_path, encoding="utf-8") as f:
             return pno, f.read()
 
-    pdf = pdfium.PdfDocument(pdf_path)
-    page = pdf[pno - 1]
-    _, ph = page.get_size()
-    scale = min(3.0, 2800.0 / ph)
-    img = page.render(scale=scale).to_pil()
-    pdf.close()
+    img = None
+    if fitz is not None:
+        doc = fitz.open(pdf_path)
+        page = doc[pno - 1]
+        scale = min(2.5, 2400.0 / page.rect.height)
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+        img = Image.open(io.BytesIO(pix.tobytes()))
+        doc.close()
+    elif pdfium is not None:
+        pdf = pdfium.PdfDocument(pdf_path)
+        page = pdf[pno - 1]
+        _, ph = page.get_size()
+        scale = min(3.0, 2800.0 / ph)
+        img = page.render(scale=scale).to_pil()
+        pdf.close()
+    else:
+        raise RuntimeError("Neither PyMuPDF (fitz) nor pypdfium2 is installed.")
 
     w, h = img.size
     if crop_hf:
@@ -86,43 +112,66 @@ def _ocr_worker(args):
         ImageDraw.Draw(img).rectangle([int(cw * 0.78), 0, cw, int(ch * 0.045)], fill=(255, 255, 255))
 
     img = ImageOps.autocontrast(ImageOps.grayscale(img), cutoff=1)
-    tmp_png = os.path.join(cache_dir, f"_tmp_{pno:04d}.png")
-    img.save(tmp_png)
 
-    env = os.environ.copy()
-    env["OMP_THREAD_LIMIT"] = "1"
-    tess_cmd = find_tesseract_cmd()
-    res = subprocess.run(
-        [tess_cmd, tmp_png, "stdout", "--tessdata-dir", tessdata_dir, "-l", lang, "--psm", "6"],
-        capture_output=True, text=True, env=env
-    )
-    try:
-        os.remove(tmp_png)
-    except OSError:
-        pass
+    text = ""
+    if tesserocr is not None:
+        try:
+            api = tesserocr.PyTessBaseAPI(path=tessdata_dir, lang=lang)
+            api.SetImage(img)
+            text = api.GetUTF8Text()
+        except Exception:
+            text = ""
+
+    if not text:
+        tmp_png = os.path.join(cache_dir, f"_tmp_{pno:04d}.png")
+        img.save(tmp_png)
+        env = os.environ.copy()
+        env["OMP_THREAD_LIMIT"] = "1"
+        tess_cmd = find_tesseract_cmd()
+        res = subprocess.run(
+            [tess_cmd, tmp_png, "stdout", "--tessdata-dir", tessdata_dir, "-l", lang, "--psm", "6"],
+            capture_output=True, text=True, env=env
+        )
+        try:
+            os.remove(tmp_png)
+        except OSError:
+            pass
+        text = res.stdout
+
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(res.stdout)
-    return pno, res.stdout
+        f.write(text)
+    return pno, text
 
 
 def extract_pdf_toc(pdf_path):
-    try:
-        reader = pypdf.PdfReader(pdf_path)
-        def walk(items):
-            out = []
-            for it in items:
-                if isinstance(it, list):
-                    out.extend(walk(it))
-                else:
-                    try:
-                        p = reader.get_destination_page_number(it) + 1
-                        out.append((it.title.strip(), p))
-                    except Exception:
-                        pass
-            return out
-        return walk(reader.outline) if reader.outline else []
-    except Exception:
-        return []
+    if fitz is not None:
+        try:
+            doc = fitz.open(pdf_path)
+            toc = doc.get_toc()
+            doc.close()
+            if toc:
+                return [(t[1].strip(), t[2]) for t in toc if t[1].strip()]
+        except Exception:
+            pass
+    if pypdf is not None:
+        try:
+            reader = pypdf.PdfReader(pdf_path)
+            def walk(items):
+                out = []
+                for it in items:
+                    if isinstance(it, list):
+                        out.extend(walk(it))
+                    else:
+                        try:
+                            p = reader.get_destination_page_number(it) + 1
+                            out.append((it.title.strip(), p))
+                        except Exception:
+                            pass
+                return out
+            return walk(reader.outline or [])
+        except Exception:
+            pass
+    return []
 
 
 def _set_font(run, size_pt=11, bold=False, color=TEXT_RGB):
@@ -159,9 +208,17 @@ def convert_pdf_to_docx(
 ):
     """Full pipeline: parallel OCR with resume cache -> proofread Word (.docx) with TOC & original page numbers."""
     t0 = time.time()
-    pdf = pdfium.PdfDocument(pdf_path)
-    total_pdf = len(pdf)
-    pdf.close()
+    total_pdf = 0
+    if fitz is not None:
+        doc_in = fitz.open(pdf_path)
+        total_pdf = len(doc_in)
+        doc_in.close()
+    elif pdfium is not None:
+        pdf = pdfium.PdfDocument(pdf_path)
+        total_pdf = len(pdf)
+        pdf.close()
+    else:
+        raise RuntimeError("No PDF library available.")
 
     end_page = min(end_page or total_pdf, total_pdf)
     start_page = max(1, start_page)
