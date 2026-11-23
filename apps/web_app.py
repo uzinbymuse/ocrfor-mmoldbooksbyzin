@@ -391,15 +391,28 @@ class StudioHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
-def run(port=8080):
-    server = HTTPServer(("127.0.0.1", port), StudioHandler)
-    print(f"Myanmar Dhamma OCR Studio running at http://localhost:{port}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    server.server_close()
+def run(port=8085):
+    target_ports = [port, 8086, 8090, 8888, 5050] if port == 8085 else [port]
+    for p in target_ports:
+        try:
+            server = HTTPServer(("127.0.0.1", p), StudioHandler)
+            print(f"\n=======================================================", flush=True)
+            print(f"  Myanmar Dhamma OCR Studio is RUNNING!", flush=True)
+            print(f"  Browser URL: http://localhost:{p}", flush=True)
+            print(f"=======================================================\n", flush=True)
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            server.server_close()
+            return
+        except OSError:
+            continue
+    print("Could not bind to any suitable port.")
 
 
 if __name__ == "__main__":
-    run()
+    p = 8085
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        p = int(sys.argv[1])
+    run(p)
