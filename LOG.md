@@ -26,4 +26,9 @@
   - Added one-click Header Logo Crop toggle (`☑ ခေါင်းစီးတံဆိပ် ဖြတ်မည်`) and Auto-Proofread cleaner (`☑ အလိုအလျောက် သန့်စင်မည်`).
   - Switched image preview serving to lightweight 130 DPI JPEG to eliminate socket abort errors (`[WinError 10053]`).
   - Set `mya_dhamma_v9_balanced` as default engine across web studio and batch pipelines.
+* **Batch 6 Multi-Book Grammar & Nissaya Pack Curated (98 lines)**:
+  - Audited previous GT dataset; revealed 0 occurrences of critical grammatical terminology (`သဒ္ဒါ`, `သင်္ဂြိုဟ်`, `အဋ္ဌကထာ`, `ဋီကာ`, `ပိဋကတ်`, `ဂဏ္ဍိ`, `စကား`, `ဓာတ်`).
+  - Extracted 58 real ground-truth lines across 3 classical books: `Basic_Kaccayana_Grammar` p.5 (25 lines), `Maydine_01` p.26 (16 lines), and `Ru_Gandi` p.36 (17 lines).
+  - Synthesized 40 targeted contrast lines addressing narrow lead-type `သဒ္ဒါ`, kinzi `င်္`, `ဉာဏ်`, `စကား`, `အဋ္ဌကထာ`, `ဋီကာ`, `ပိဋကတ်`, `ဓာတ်`, `မွေ့`, `ရှား`, `ပ္ပ`, and digits `၇/၈/၉`.
+  - Compiled `data/ground_truth/batch6_verified.json` (98 lines, 6,435 characters) and generated `BATCH6_GRAMMAR_PACK_SPEC.md` ready for `mya_dhamma_v10` training.
 * Saved reusable workflow skill `myanmar-dhamma-ocr-trainer` (`SKILL.md`).
