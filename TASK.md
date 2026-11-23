@@ -9,5 +9,6 @@
 ## Active & Upcoming Milestones (v3 / v4)
 - [/] **Phase 5: Batch 2 Human Ground-Truth Collection** — Receive downloaded `batch2_verified.json` (77 lines from Vol. 1 p. 12, Vol. 2 p. 22, Vol. 2 p. 34) and convert to `.lstmf`.
 - [x] **Phase 5b: Ground-Truth Dataset Ingestion (81 lines)** — Verified and saved 81 lines (`data/ground_truth/batch_verified_81lines.json`) across Vol. 2 p. 236, Vol. 1 p. 280, Vol. 1 p. 531.
-- [ ] **Phase 6: Train `mya_dhamma_v3` & `mya_dhamma_v4` on 100% Human-Verified Ground Truth** — Combine Batch 1 + Batch 2 (+ optional Batch 3/4 for `၌`, `ဪ`, `ဎ`, `ဈ` coverage), fine-tune cleanly without pseudo-label noise, and benchmark against `v2` on Vol. 1 Preface p. 11 and Unseen Vol. 2 p. 23.
-- [ ] **Phase 7: Release & Auto-Update Push** — Package new `.traineddata`, update `version.json` & `TRAINING_LOG.md` on `uzinbymuse/ocrfor-mmoldbooksbyzin`, and verify PC Auto-Updater pulls the latest version.
+- [x] **Phase 5c: Batch 5 Pack & Ingestion (80 lines)** — Filtered 17 ghost slices, ingested 80 clean lines (`data/ground_truth/batch5_verified.json`).
+- [x] **Phase 6: Clean-Slate Training (`mya_dhamma_v8_clean`)** — 100% Human-verified Batches 1–5 (356 lines) + 40 synthetic lines from `base/mya.lstm`. Achieved all-time high **96.51%** on Unseen Vol. 2 p.23, solved `၊ vs ။` regression.
+- [x] **Phase 7: Release & Auto-Update Push** — Deployed `mya_dhamma_v8_clean.traineddata`, updated `version.json` (v8.0.0-clean) & `BENCHMARK_v8_clean.md`.

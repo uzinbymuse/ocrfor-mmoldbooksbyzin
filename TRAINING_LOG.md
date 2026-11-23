@@ -18,3 +18,23 @@
 - Empty body pages: `0` (နှစ်အုပ်လုံး)
 - အတွဲ (၁) (592 pp.): 747,764 chars | `။` 10,254 · `၊` 3,095 · `၏` 697 · `၌` 123 · `ဣ` 103 · `ဩ` 70
 - အတွဲ (၂) (611 pp.): 817,687 chars | `။` 11,545 · `၊` 3,468 · `၏` 700 · `၌` 95 · `ဣ` 48 · `ဩ` 92 · `ဈ` 6
+
+---
+
+# Training Log — `mya_dhamma_v8_clean.traineddata` (Clean-Slate)
+
+## ၁။ လေ့ကျင့်မှု အနှစ်ချုပ်
+- **Base Model:** Google `tessdata_best/mya.traineddata` (`base/mya.lstm`, zero pseudo-label weight inheritance)
+- **Classes:** 159 classes (Replace Top Layer, `--append_index 5 --net_spec "[Lfx192 O1c159]"`)
+- **Dataset:** 356 Human-verified lines (Batches 1–5: 51 + 74 + 70 + 81 + 80) + 40 synthetic lines
+- **Best Iteration:** step 4,700, Training BCER: **`3.124%`** (`BWER = 20.879%`, `skip ratio = 0.5%`)
+
+## ၂။ အဓိက အောင်မြင်မှုများ
+1. **Unseen Vol 2 p.23 စံချိန်သစ်:** **`96.51%`** (Errors 62, error rate dropped to 34.9 / 1,000 chars)
+2. **`၊` vs `။` Regression အပြည့်အဝ ဖြေရှင်းနိုင်မှု:**
+   - Vol 1 p.11: `1/12` မှ `11/12` (91.7%) သို့ တိုးတက်
+   - Unseen Vol 2 p.23: `32/54` မှ `49/54` (90.7%) သို့ တိုးတက်
+3. **ရှားပါးစာလုံးများ ၁၀၀% တိကျမှု:**
+   - `ဣ`: 9/9 (100% exact recall on Unseen p.23)
+   - `၏`၊ `ဩ`၊ `၌`၊ `၍`: စာမျက်နှာ ၃ ခုလုံးတွင် 100% မှန်ကန်စွာ ဖတ်နိုင်ခဲ့သည်။
+

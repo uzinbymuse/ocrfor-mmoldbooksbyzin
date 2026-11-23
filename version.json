@@ -1,9 +1,10 @@
 {
-  "version": "2.0.0",
-  "model_name": "mya_dhamma_v2",
-  "filename": "mya_dhamma_v2.traineddata",
-  "download_url": "https://raw.githubusercontent.com/uzinbymuse/ocrfor-mmoldbooksbyzin/main/tessdata/mya_dhamma_v2.traineddata",
+  "version": "8.0.0-clean",
+  "model_name": "mya_dhamma_v8_clean",
+  "filename": "mya_dhamma_v8_clean.traineddata",
+  "download_url": "https://raw.githubusercontent.com/uzinbymuse/ocrfor-mmoldbooksbyzin/main/tessdata/mya_dhamma_v8_clean.traineddata",
   "released": "2026-11-23",
-  "bcer": "2.74%",
-  "notes": "Fine-tuned on 844 real + synthetic Myanmar/Pali lines; natively recognizes ဣ ဩ ဪ ၏ ၌ ၍ ။ ၊ ဈ ဎ."
+  "bcer": "3.124%",
+  "training_data": "356 human-verified lines (Batches 1-5) + 40 clean synthetic lines (0 pseudo-labels), clean-slate from Google base/mya.lstm",
+  "notes": "Clean-slate Replace Top Layer from base/mya.lstm (4700 steps). Fixes ၊ vs ။ regression (p11: 11/12, p23: 49/54) and achieves 96.51% on unseen Vol 2 p.23 with 100% ဣ (9/9) and ၏/ဩ/၌/၍."
 }
