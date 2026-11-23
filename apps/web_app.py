@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.updater import ROOT_DIR, TESSDATA_DIR, get_active_model_name, check_and_update
 from core.ocr_engine import clean_line
 from core.post_processor import proofread_text
+from core.hitl_confidence import extract_lines_with_tesserocr, serialize_page_qc, handle_save_gt_payload
+from core.myanmar_normalizer import normalize_myanmar_unicode
 import fitz
 import tesserocr
 from PIL import Image, ImageOps, ImageEnhance
@@ -81,6 +83,15 @@ textarea { width: 100%; flex: 1; padding: 16px; border: none; outline: none; fon
 .status-bar { margin-top: 16px; padding: 10px 14px; background: #f5efe8; border-radius: 6px; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
 progress { width: 100%; height: 16px; margin-top: 10px; }
 .copy-btn { font-size: 12px; padding: 4px 10px; background: #2b7a4b; }
+.conf-low { background-color: #ffcdd2; color: #b71c1c; border-radius: 3px; padding: 1px 4px; font-weight: bold; }
+.conf-warn { background-color: #fff9c4; color: #e65100; border-radius: 3px; padding: 1px 4px; }
+.conf-ok { color: #1b5e20; }
+.qc-card { border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.qc-card:hover { border-color: #0277bd; }
+.qc-line-text { font-family: 'Noto Serif Myanmar', serif; font-size: 16px; line-height: 1.8; margin-bottom: 8px; }
+.qc-actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 13px; color: #555; }
+.btn-save-gt { background: #2e7d32; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.btn-save-gt:hover { background: #1b5e20; }
 .copy-btn:hover { background: #23633d; }
 .btn-upload {
   display: inline-flex;
@@ -176,12 +187,14 @@ progress { width: 100%; height: 16px; margin-top: 10px; }
       <div class="pane-header">
         <span>📝 ဖတ်ရှုရရှိသော စာသား (OCR Text - ပြင်ဆင်နိုင်သည်)</span>
         <div style="display:flex; gap:6px;">
+          <button class="copy-btn" id="btnToggleQc" onclick="toggleQcView()" style="background:#0277bd; color:#fff;" title="Confidence ရမှတ်များနှင့် စာလုံးအမှားများကို အရောင်ခွဲပြသသည်">🔍 QC View</button>
           <button class="copy-btn" onclick="smartProofread()" style="background:#2e7d32; color:#fff;" title="သဒ္ဒါ၊ ဓမ္မအဘိဓာန်နှင့် ဖွဲ့စည်းပုံစည်းမျဉ်းများဖြင့် စာလုံးပေါင်း အမှန်ပြင်သည်">✨ Smart Proofread</button>
           <button class="copy-btn" onclick="copyText()">📋 Copy Text</button>
         </div>
       </div>
       <div class="text-box">
         <textarea id="ocrOutput" placeholder="⚡ Run OCR ခလုတ်ကို နှိပ်ပါက စာသားများ ဤနေရာတွင် ပေါ်လာပါမည်..."></textarea>
+        <div id="qcOutput" style="display:none; padding:12px; overflow-y:auto; flex:1; max-height:600px; background:#fbfbfb;"></div>
       </div>
     </div>
   </div>
@@ -299,6 +312,105 @@ function loadPage() {
   document.getElementById('pageImg').src = imgUrl;
   document.getElementById('imgInfo').textContent = `Page ${pno}`;
   document.getElementById('ocrOutput').value = '';
+}
+
+let isQcView = false;
+let currentQcData = null;
+
+async function toggleQcView() {
+  isQcView = !isQcView;
+  const btn = document.getElementById('btnToggleQc');
+  const txtArea = document.getElementById('ocrOutput');
+  const qcBox = document.getElementById('qcOutput');
+  if (isQcView) {
+    btn.textContent = '📝 Text View';
+    btn.style.background = '#e65100';
+    txtArea.style.display = 'none';
+    qcBox.style.display = 'block';
+    loadQcView();
+  } else {
+    btn.textContent = '🔍 QC View';
+    btn.style.background = '#0277bd';
+    txtArea.style.display = 'block';
+    qcBox.style.display = 'none';
+  }
+}
+
+async function loadQcView() {
+  const sel = document.getElementById('bookSelect');
+  const pno = document.getElementById('pageNum').value;
+  const mdl = document.getElementById('modelSelect').value;
+  const psm = document.getElementById('psmSelect').value || "6";
+  const qcBox = document.getElementById('qcOutput');
+  qcBox.innerHTML = '<div style="padding:20px; color:#666;">⏳ Confidence QC စာရင်းကို တွက်ချက်နေပါသည်...</div>';
+  try {
+    const res = await fetch(`/api/page_qc?book=${sel.value}&page=${pno}&model=${mdl}&psm=${psm}`);
+    const data = await res.json();
+    currentQcData = data;
+    if (data.error) {
+      qcBox.innerHTML = `<div style="color:red; padding:16px;">Error: ${data.error}</div>`;
+      return;
+    }
+    renderQcCards(data);
+  } catch(e) {
+    qcBox.innerHTML = `<div style="color:red; padding:16px;">Error: ${e.message}</div>`;
+  }
+}
+
+function renderQcCards(data) {
+  const qcBox = document.getElementById('qcOutput');
+  let h = `<div style="margin-bottom:12px; padding:8px 12px; background:#eef4f8; border-radius:6px; font-size:13px; color:#333;">
+    <strong>📊 စာမျက်နှာ QC:</strong> စာကြောင်း ${data.summary.total_lines} ကြောင်း | အကဲဖြတ်စာလုံး ${data.summary.total_words} လုံး |
+    <span class="conf-low" style="margin-left:4px;">အာရုံစိုက်ရန် (&lt;70%): ${data.summary.low_conf_words}</span> |
+    <span class="conf-warn" style="margin-left:4px;">သတိပြုရန် (70-85%): ${data.summary.warn_conf_words}</span>
+  </div>`;
+  data.lines.forEach((l, idx) => {
+    h += `<div class="qc-card" id="qc-line-${idx}">
+      <div class="qc-line-text">${l.highlight_html}</div>
+      <div style="margin-bottom:6px;">
+        <input type="text" id="gt-edit-${idx}" value="${l.text.replace(/"/g, '&quot;')}" style="width:100%; font-family:'Noto Serif Myanmar', serif; font-size:15px; padding:6px 8px; border:1px solid #ccc; border-radius:4px;">
+      </div>
+      <div class="qc-actions">
+        <span>Conf: <strong>${l.confidence.toFixed(1)}%</strong> (${l.word_count} words)</span>
+        <button class="btn-save-gt" onclick="saveLineGt(${idx})">💾 Save Verified GT (12% Pad)</button>
+      </div>
+    </div>`;
+  });
+  qcBox.innerHTML = h;
+}
+
+async function saveLineGt(idx) {
+  if (!currentQcData || !currentQcData.lines[idx]) return;
+  const l = currentQcData.lines[idx];
+  const editedText = document.getElementById(`gt-edit-${idx}`).value;
+  const sel = document.getElementById('bookSelect');
+  const pno = parseInt(document.getElementById('pageNum').value);
+  const payload = {
+    book_id: decodeURIComponent(sel.value).replace('.pdf', ''),
+    page_no: pno,
+    line_index: idx,
+    bbox: l.bbox,
+    original_ocr_text: l.text,
+    corrected_text: editedText,
+    original_confidence: (l.mean_confidence !== undefined ? l.mean_confidence : l.confidence)
+  };
+  try {
+    const res = await fetch('/api/save_gt', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.success) {
+      alert(`Line ${idx+1} ကို Ground Truth အဖြစ် သိမ်းဆည်းပြီးပါပြီ!\nဖိုင်: ${d.saved.gt_txt_path}`);
+      document.getElementById(`qc-line-${idx}`).style.borderLeft = '5px solid #2e7d32';
+      document.getElementById(`qc-line-${idx}`).style.backgroundColor = '#f1f8e9';
+    } else {
+      alert('Error: ' + d.error);
+    }
+  } catch(e) {
+    alert('Save failed: ' + e.message);
+  }
 }
 
 async function runPageOcr() {
@@ -450,6 +562,31 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self.send_error(500, str(e))
                 return
 
+        if url.path == "/api/page_qc":
+            book_name = qs.get("book", [""])[0]
+            pno = int(qs.get("page", ["1"])[0])
+            model_name = qs.get("model", ["mya_dhamma_v10"])[0]
+            psm_val = int(qs.get("psm", ["6"])[0])
+            book_path = os.path.join(SOURCE_BOOKS_DIR, book_name)
+            if not os.path.exists(book_path):
+                self._json({"error": "Book not found"}, 404)
+                return
+            try:
+                doc = fitz.open(book_path)
+                pno = max(1, min(pno, len(doc)))
+                page = doc[pno - 1]
+                pix = page.get_pixmap(dpi=180)
+                img = Image.open(io.BytesIO(pix.tobytes()))
+                doc.close()
+                img = ImageOps.autocontrast(ImageOps.grayscale(img), cutoff=1)
+                img = ImageEnhance.Sharpness(img).enhance(1.3)
+                lines = extract_lines_with_tesserocr(img, tessdata_dir=TESSDATA_DIR, lang=model_name, psm=psm_val)
+                qc = serialize_page_qc(lines, page_no=pno, image_size=img.size)
+                self._json(qc)
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+            return
+
         if url.path == "/api/status":
             self._json(STATE)
             return
@@ -490,6 +627,42 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._json({"success": True, "filename": saved_filename, "pages": pages})
             else:
                 self._json({"error": "No valid PDF file uploaded"}, 400)
+            return
+
+        if url.path == "/api/save_gt":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            data = json.loads(body)
+            book_name = data.get("book_id", "")
+            if not book_name.endswith(".pdf"):
+                book_name_pdf = book_name + ".pdf"
+            else:
+                book_name_pdf = book_name
+            pno = int(data.get("page_no", 1))
+            book_path = os.path.join(SOURCE_BOOKS_DIR, book_name_pdf)
+            if not os.path.exists(book_path):
+                # Search without extension
+                for f in os.listdir(SOURCE_BOOKS_DIR):
+                    if f.startswith(book_name):
+                        book_path = os.path.join(SOURCE_BOOKS_DIR, f)
+                        break
+
+            if not os.path.exists(book_path):
+                self._json({"error": f"Book file not found: {book_name}"}, 404)
+                return
+            try:
+                doc = fitz.open(book_path)
+                pno = max(1, min(pno, len(doc)))
+                page = doc[pno - 1]
+                pix = page.get_pixmap(dpi=180)
+                img = Image.open(io.BytesIO(pix.tobytes())).convert("L")
+                doc.close()
+                gt_dir = os.path.join(ROOT_DIR, "data", "ground_truth")
+                os.makedirs(gt_dir, exist_ok=True)
+                res = handle_save_gt_payload(data, page_img=img, gt_dir=gt_dir)
+                self._json({"success": True, "saved": res})
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
             return
 
         if url.path == "/api/proofread":

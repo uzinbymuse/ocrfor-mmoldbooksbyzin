@@ -25,6 +25,7 @@ except ImportError:
     pypdf = None
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance
 from core.post_processor import proofread_text
+from core.myanmar_normalizer import normalize_myanmar_unicode
 import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER
@@ -73,12 +74,13 @@ def clean_line(line: str) -> str:
     line = line.replace("​", "").replace("﻿", "").strip()
     if not line or "dhammadownload" in line.lower() or "http://" in line.lower():
         return ""
+    line = normalize_myanmar_unicode(line)
     for pat, repl in COMPILED_FIXES:
         line = pat.sub(repl, line)
     line = proofread_text(line)
     line = re.sub(r"[။]{2,}", "။", line)
     line = re.sub(r"[၊]{2,}", "၊", line)
-    line = re.sub(r"\s+([။၊])", r"", line)
+    line = re.sub(r"\s+([။၊])", r"\1", line)
     return re.sub(r"[ 	]{2,}", " ", line).strip()
 
 
