@@ -63,7 +63,10 @@ def evaluate():
     print(f"Lines: {len(gt_lines)}, Chars: {gt_chars}, Commas (၊): {gt_commas}, Dandas (။): {gt_dandas}")
     print()
 
-    for model in ["mya_dhamma_v10", "mya_dhamma_v11"]:
+    for model in ["mya_dhamma_v10", "mya_dhamma_v11", "mya_dhamma_v12", "mya_dhamma_v12b", "mya_dhamma_v13_real"]:
+        model_file = os.path.join(TESSDATA_DIR, f"{model}.traineddata")
+        if not os.path.exists(model_file):
+            continue
         for psm in ["6"]:
             raw_out = run_ocr(model, psm=psm)
             norm_out = normalize_myanmar_unicode(raw_out)
