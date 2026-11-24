@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "description": "Frozen Golden Evaluation Set for Dhamma Lead-Type Books",
+  "baseline_model": "mya_dhamma_v10",
+  "pages": [
+    {
+      "page_id": "kaccayana_p5",
+      "book_id": "basic_kaccayana",
+      "stratum": "grammar_leadtype",
+      "image_path": "data/eval_benchmarks/kaccayana_p5.png",
+      "ref_txt": "refs/kaccayana_p5.txt"
+    }
+  ]
+}

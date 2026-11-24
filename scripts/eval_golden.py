@@ -323,7 +323,8 @@ def evaluate_manifest(
             hyp_name = entry.get("hyp_txt") or f"{page_id}.txt"
             hyp_path = hyp_dir / Path(hyp_name).name
         else:
-            hyp_path = Path(entry["hyp_txt"])
+            hyp_name = entry.get("hyp_txt") or f"{page_id}.txt"
+            hyp_path = Path(hyp_name)
             if not hyp_path.is_absolute():
                 hyp_path = base_dir / hyp_path
 

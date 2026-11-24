@@ -18,8 +18,8 @@ cd "$REPO_ROOT"
 MODEL_NAME="${MODEL_NAME:-mya_dhamma_v11}"
 BASE_MODEL="${BASE_MODEL:-tessdata/mya_dhamma_v10.traineddata}"
 WORK_DIR="${WORK_DIR:-data/v11}"
-TRAIN_LIST="${TRAIN_LIST:-data/v11/lists/train_list.txt}"
-EVAL_LIST="${EVAL_LIST:-data/v11/lists/eval_list.txt}"
+TRAIN_LIST="${TRAIN_LIST:-data/train_list_v11.txt}"
+EVAL_LIST="${EVAL_LIST:-data/eval_list_v11.txt}"
 STARTER_DIR="${STARTER_DIR:-starter_v11}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-checkpoints_v11}"
 OUTPUT_DIR="${OUTPUT_DIR:-output_v11}"
@@ -45,7 +45,7 @@ echo " Target Error:     $TARGET_ERROR_RATE"
 echo " Default PSM:      $PSM_SETTING"
 echo "========================================================================"
 
-mkdir -p base "$STARTER_DIR" "$CHECKPOINT_DIR" "$OUTPUT_DIR" "$SCRIPT_DUMMY"
+mkdir -p base "$WORK_DIR" "$STARTER_DIR" "$CHECKPOINT_DIR" "$OUTPUT_DIR" "$SCRIPT_DUMMY"
 
 # ------------------------------------------------------------------------------
 # 2. Verify Prerequisites & Dataset Listfiles
@@ -56,12 +56,20 @@ if [ ! -f "$BASE_MODEL" ]; then
 fi
 
 if [ ! -f "$TRAIN_LIST" ] || [ ! -s "$TRAIN_LIST" ]; then
-    echo "WARNING: $TRAIN_LIST is missing or empty. Running prepare_v11_training.py ..."
-    python3 scripts/prepare_v11_training.py --beatson-lines 4000 --synthetic-lines 3000 --min-total 6000
+    if [ -f "data/v11/lists/train_list.txt" ] && [ -s "data/v11/lists/train_list.txt" ]; then
+        TRAIN_LIST="data/v11/lists/train_list.txt"
+        EVAL_LIST="data/v11/lists/eval_list.txt"
+    else
+        echo "WARNING: $TRAIN_LIST is missing or empty. Running prepare_v11_training.py ..."
+        python3 scripts/prepare_v11_training.py --target-total 6800
+    fi
 fi
 
 TRAIN_COUNT=$(wc -l < "$TRAIN_LIST")
-EVAL_COUNT=$(wc -l < "$EVAL_LIST")
+EVAL_COUNT=0
+if [ -f "$EVAL_LIST" ]; then
+    EVAL_COUNT=$(wc -l < "$EVAL_LIST")
+fi
 echo " Dataset Confirmed: $TRAIN_COUNT training lines | $EVAL_COUNT validation lines"
 
 # ------------------------------------------------------------------------------
@@ -75,7 +83,26 @@ combine_tessdata -e "$BASE_MODEL" base/mya_dhamma_v10.lstm
 # 4. Extract & Merge Canonical Unicharset
 # ------------------------------------------------------------------------------
 echo "[2/6] Building unicharset from training corpus (UTN #11 canonical order) ..."
-cat "$WORK_DIR"/*/*.gt.txt > "$WORK_DIR/all_gt.txt"
+python3 -c "
+import json, os
+mpath = 'data/training_manifest_v11.json'
+out_txt = '$WORK_DIR/all_gt.txt'
+if os.path.exists(mpath):
+    with open(mpath, 'r', encoding='utf-8') as f:
+        m = json.load(f)
+    lines = [e['text'].strip() for e in m.get('train_entries', []) if e.get('text', '').strip()]
+    with open(out_txt, 'w', encoding='utf-8') as out:
+        out.write('\n'.join(lines) + '\n')
+else:
+    # fallback to any existing .gt.txt files
+    import glob
+    lines = []
+    for gtf in glob.glob('data/*/*.gt.txt'):
+        lines.append(open(gtf, encoding='utf-8').read().strip())
+    with open(out_txt, 'w', encoding='utf-8') as out:
+        out.write('\n'.join(lines) + '\n')
+"
+
 unicharset_extractor --output_unicharset "$WORK_DIR/new.unicharset" --norm_mode 2 "$WORK_DIR/all_gt.txt"
 merge_unicharsets base/mya_dhamma_v10.lstm-unicharset "$WORK_DIR/new.unicharset" "$WORK_DIR/merged.unicharset"
 
@@ -109,6 +136,11 @@ echo "[4/6] Launching lstmtraining ..."
 echo "      Base LSTM: base/mya_dhamma_v10.lstm"
 echo "      Append Index: 5 | Net Spec: [Lfx192 O1c${NUM_CLASSES}]"
 
+EVAL_FLAG=()
+if [ -f "$EVAL_LIST" ] && [ -s "$EVAL_LIST" ]; then
+    EVAL_FLAG=(--eval_listfile "$EVAL_LIST")
+fi
+
 lstmtraining \
     --continue_from base/mya_dhamma_v10.lstm \
     --traineddata "$STARTER_TRAINEDDATA" \
@@ -116,7 +148,7 @@ lstmtraining \
     --net_spec "[Lfx192 O1c${NUM_CLASSES}]" \
     --model_output "${CHECKPOINT_DIR}/${MODEL_NAME}" \
     --train_listfile "$TRAIN_LIST" \
-    --eval_listfile "$EVAL_LIST" \
+    "${EVAL_FLAG[@]}" \
     --learning_rate "$LEARNING_RATE" \
     --debug_interval "$DEBUG_INTERVAL" \
     --max_iterations "$MAX_ITERATIONS" \

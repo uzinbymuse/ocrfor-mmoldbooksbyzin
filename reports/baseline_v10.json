@@ -1,0 +1,52 @@
+{
+  "evaluated_at": "2026-11-24T00:39:14.799607+00:00",
+  "scorer": "builtin_levenshtein",
+  "normalization_policy": "UTN11_NFC_collapse_spaces_strip_blank_lines",
+  "metadata": {
+    "model": "mya_dhamma_v10",
+    "psm": 6,
+    "date": "2026-11-24"
+  },
+  "overall": {
+    "stratum": "OVERALL",
+    "page_count": 1,
+    "total_ref_chars": 1333,
+    "cer_pct": 7.877,
+    "cer_min_pct": 7.877,
+    "cer_max_pct": 7.877,
+    "cer_nospace_pct": 7.154,
+    "char_accuracy_pct": 92.123,
+    "wer_pct": 43.269,
+    "exact_line_pct": 24.0
+  },
+  "strata": {
+    "grammar_leadtype": {
+      "stratum": "grammar_leadtype",
+      "page_count": 1,
+      "total_ref_chars": 1333,
+      "cer_pct": 7.877,
+      "cer_min_pct": 7.877,
+      "cer_max_pct": 7.877,
+      "cer_nospace_pct": 7.154,
+      "char_accuracy_pct": 92.123,
+      "wer_pct": 43.269,
+      "exact_line_pct": 24.0
+    }
+  },
+  "pages": [
+    {
+      "page_id": "kaccayana_p5",
+      "book_id": "basic_kaccayana",
+      "stratum": "grammar_leadtype",
+      "ref_chars": 1333,
+      "ref_words": 104,
+      "ref_lines": 25,
+      "exact_lines": 6,
+      "cer_pct": 7.877,
+      "cer_nospace_pct": 7.154,
+      "char_accuracy_pct": 92.123,
+      "wer_pct": 43.269,
+      "exact_line_pct": 24.0
+    }
+  ]
+}

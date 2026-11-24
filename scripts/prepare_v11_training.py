@@ -58,8 +58,10 @@ def is_frozen_eval_id(line_id: str) -> bool:
     return any(lid.startswith(p) for p in FROZEN_EVAL_PREFIXES)
 
 
-def load_human_gt(gt_dirs, img_search_dirs):
-    """Load all human-verified JSON batches, normalize via UTN #11, and split frozen eval vs train."""
+def load_human_gt(gt_dirs, img_search_dirs, fonts=None):
+    """Load all human-verified JSON batches, normalize via UTN #11, and split frozen eval vs train.
+    Ensures 100% of entries have line images (scanned crop or high-fidelity degraded render) with 12% vertical padding.
+    """
     seen_ids = set()
     train_human = []
     eval_human = []
@@ -77,6 +79,25 @@ def load_human_gt(gt_dirs, img_search_dirs):
         if key not in by_stem or "_corrected.json" in bn:
             by_stem[key] = jf
 
+    # Pre-index all available PNG images under img_search_dirs recursively
+    cand_images = {}
+    for idir in img_search_dirs:
+        if os.path.isdir(idir):
+            for r, _, files in os.walk(idir):
+                for fn in files:
+                    if fn.lower().endswith(".png"):
+                        stem = os.path.splitext(fn)[0]
+                        cand_images[stem] = os.path.join(r, fn)
+
+    human_synth_dir = os.path.join(REPO_ROOT, "data", "v11_human_synth")
+    human_padded_dir = os.path.join(REPO_ROOT, "data", "v11_human_padded")
+    eval_synth_dir = os.path.join(REPO_ROOT, "data", "v11_eval")
+    os.makedirs(human_synth_dir, exist_ok=True)
+    os.makedirs(human_padded_dir, exist_ok=True)
+    os.makedirs(eval_synth_dir, exist_ok=True)
+
+    rng = random.Random(2026)
+
     for jf in sorted(by_stem.values()):
         try:
             rows = json.load(open(jf, encoding="utf-8"))
@@ -92,13 +113,36 @@ def load_human_gt(gt_dirs, img_search_dirs):
                 continue
             seen_ids.add(lid)
             norm_txt = normalize_myanmar_unicode(raw_txt)
-            # Find matching PNG image
-            img_path = None
-            for idir in img_search_dirs:
-                cand = os.path.join(idir, lid + ".png")
-                if os.path.exists(cand):
-                    img_path = cand
-                    break
+
+            # 1. Check if real scanned crop exists
+            img_path = cand_images.get(lid)
+            if img_path and os.path.exists(img_path):
+                # Apply 12% vertical padding to scanned crop
+                padded_path = os.path.join(human_padded_dir, lid + ".png")
+                if not os.path.exists(padded_path):
+                    try:
+                        with Image.open(img_path) as im:
+                            g = im.convert("L")
+                            pad_y = max(8, int(g.height * 0.12))
+                            padded = Image.new("L", (g.width + 24, g.height + 2 * pad_y), 255)
+                            padded.paste(g, (12, pad_y))
+                            padded.save(padded_path)
+                        img_path = padded_path
+                    except Exception:
+                        pass
+                else:
+                    img_path = padded_path
+            elif fonts:
+                # 2. Render high-fidelity degraded synthetic line if real crop is unavailable
+                is_eval = is_frozen_eval_id(lid)
+                target_dir = eval_synth_dir if is_eval else human_synth_dir
+                syn_png = os.path.join(target_dir, lid + ".png")
+                if not os.path.exists(syn_png):
+                    fpath = fonts[len(seen_ids) % len(fonts)]
+                    im = render_degraded_line(norm_txt, fpath, font_size=34, vertical_pad_ratio=0.12, rng=rng)
+                    im.save(syn_png)
+                img_path = syn_png
+
             rec = {
                 "id": lid,
                 "text": norm_txt,
@@ -310,8 +354,11 @@ def main():
     gt_dirs = [os.path.join(data_dir, "ground_truth")] + args.gt_dir
     img_dirs = [os.path.join(data_dir, "ground_truth"), os.path.join(data_dir, "gt_human")] + args.img_dir
 
+    fonts = discover_myanmar_fonts()
+    assert fonts, "No Myanmar fonts found on system (install Noto Serif Myanmar / Padauk / Pyidaungsu)."
+
     # 1. Load Human-Verified GT & split Frozen 4-page Eval Set
-    train_human, eval_human = load_human_gt(gt_dirs, img_dirs)
+    train_human, eval_human = load_human_gt(gt_dirs, img_dirs, fonts=fonts)
     print(f"[STEP 1] Loaded Human GT: train_unique={len(train_human)}, frozen_eval={len(eval_human)}")
 
     # 2. Try Beatson HF Dataset (3,000 ~ 5,000 lines) with smooth offline fallback
@@ -328,8 +375,6 @@ def main():
         ("v2", args.corpus_v2),
     ])
     syn_texts = build_synthetic_text_pool(target_count=needed_syn, extra_corpus_texts=extra_corpus, seed=1101)
-    fonts = discover_myanmar_fonts()
-    assert fonts, "No Myanmar fonts found on system (install Noto Serif Myanmar / Padauk / Pyidaungsu)."
 
     render_n = len(syn_texts) if args.render_limit <= 0 else min(len(syn_texts), args.render_limit)
     print(f"[STEP 2] Building {len(syn_texts)} Degraded Synthetic Dhamma/Pali entries (rendering {render_n} PNGs with {len(fonts)} font(s))...")
